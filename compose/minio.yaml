@@ -1,0 +1,29 @@
+# S3-compatible object storage (+ console).
+# Pinned to the last release that ships a full admin console. Swap to `minio/minio`
+# if you only need the S3 API + the `mc` CLI.
+services:
+  minio:
+    image: quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e  # RELEASE.2025-04-22T22-12-26Z
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${LAB_USER}
+      - MINIO_ROOT_PASSWORD=${LAB_PASSWORD}   # shared lab login; must be >= 8 chars
+      - MINIO_BROWSER_REDIRECT_URL=https://s3-console.${LAB_DOMAIN}
+    volumes:
+      - ../volumes/minio:/data
+    networks:
+      - caddy
+    labels:
+      # Two sites on one container -> caddy_0 / caddy_1 ordinal label groups.
+      caddy_0: s3.${LAB_DOMAIN}
+      caddy_0.reverse_proxy: "{{upstreams 9000}}"
+      caddy_1: s3-console.${LAB_DOMAIN}
+      caddy_1.reverse_proxy: "{{upstreams 9001}}"
+      homepage.group: Storage & Packages
+      homepage.name: MinIO (S3)
+      homepage.icon: minio.png
+      homepage.href: https://s3-console.${LAB_DOMAIN}
+      homepage.description: S3-compatible object storage
+      homepage.weight: "50"

@@ -1,0 +1,5 @@
+# Services are discovered from `homepage.*` container labels, so this list stays empty.
+# Keep the file: if it's missing, Homepage regenerates it with live example tiles. The
+# empty [] suppresses them. Add manual (non-container) entries here if you ever need
+# them -- they merge with the auto-discovered ones.
+[]

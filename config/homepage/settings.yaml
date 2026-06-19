@@ -1,0 +1,16 @@
+title: lab
+theme: dark
+color: slate
+headerStyle: clean
+hideVersion: true
+
+layout:
+  Infrastructure:
+    style: row
+    columns: 4
+  Tools:
+    style: row
+    columns: 2
+  Storage & Packages:
+    style: row
+    columns: 4

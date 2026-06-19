@@ -1,0 +1,17 @@
+# offline data-mangling swiss army knife (https://cyberchef.lab).
+services:
+  cyberchef:
+    image: mpepping/cyberchef@sha256:afbf73568a976474ec972e62939ac70d4917136ed274c81b5498ee1e7d406493  # CyberChef 1.30.3
+    container_name: cyberchef
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: cyberchef.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8000}}"
+      homepage.group: Tools
+      homepage.name: CyberChef
+      homepage.icon: cyberchef.png
+      homepage.href: https://cyberchef.${LAB_DOMAIN}
+      homepage.description: The cyber swiss army knife
+      homepage.weight: "10"

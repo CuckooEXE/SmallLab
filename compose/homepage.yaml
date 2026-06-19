@@ -1,0 +1,22 @@
+# dashboard -- auto-discovers services from container labels (config/homepage/docker.yaml).
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage@sha256:a0b71c8e757298d02560186bab9fbe3fc2d375c523a62cc1019177b37e48aa28  # v1.13.2
+    container_name: homepage
+    restart: unless-stopped
+    environment:
+      - HOMEPAGE_ALLOWED_HOSTS=home.${LAB_DOMAIN}
+    volumes:
+      - ../config/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # live container status
+    networks:
+      - caddy
+    labels:
+      caddy: home.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      homepage.group: Infrastructure
+      homepage.name: Homepage
+      homepage.icon: homepage.png
+      homepage.href: https://home.${LAB_DOMAIN}
+      homepage.description: This dashboard
+      homepage.weight: "30"

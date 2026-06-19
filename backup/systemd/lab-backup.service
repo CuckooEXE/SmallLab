@@ -1,0 +1,16 @@
+# Installed to /etc/systemd/system/. Runs the rsync snapshot backup.
+#   sudo install -m755 backup/lab-backup.sh /opt/lab-backup/lab-backup.sh
+#   sudo install -d /etc/lab-backup && sudo cp backup/config.env.example /etc/lab-backup/config.env  # then edit
+#   sudo cp backup/systemd/lab-backup.* /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now lab-backup.timer
+[Unit]
+Description=rsync snapshot backup of the lab docker volumes
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lab-backup/lab-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6

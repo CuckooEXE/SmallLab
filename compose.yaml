@@ -1,0 +1,41 @@
+# .lab homelab stack -- root compose file.
+#
+# Service definitions are split one-per-service under compose/ and merged in via the
+# `include:` list below. Shared networks are declared here so every service can join them.
+# Runtime state is bind-mounted under volumes/ (git-ignored); checked-in config lives
+# under config/.
+#
+# Bring it up from THIS directory (it auto-discovers compose.yaml and reads .env):
+#   docker compose up -d
+#   ./bootstrap.sh
+
+name: lab
+
+include:
+  - compose/caddy.yaml
+  - compose/step-ca.yaml
+  - compose/homepage.yaml
+  - compose/technitium.yaml
+  - compose/forgejo.yaml
+  - compose/minio.yaml
+  - compose/samba.yaml
+  - compose/filebrowser.yaml
+  - compose/webdav.yaml
+  - compose/cyberchef.yaml
+  - compose/it-tools.yaml
+  - compose/devdocs.yaml
+  - compose/drawio.yaml
+  - compose/privatebin.yaml
+  - compose/vaultwarden.yaml
+  - compose/dozzle.yaml
+  - compose/uptime-kuma.yaml
+
+networks:
+  # Ingress: Caddy and every container it reverse-proxies.
+  caddy:
+    name: caddy
+  # Back-of-house: samba only. Kept off the `caddy` ingress network; samba reaches
+  # the LAN through its own published 445/139 host ports (which require a normal,
+  # non-internal network -- Docker can't publish host ports through an internal one).
+  backend:
+    name: backend

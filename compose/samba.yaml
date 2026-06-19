@@ -1,0 +1,28 @@
+# SMB file share at \\files.lab\lab -- passwordless guest access (no SMB auth).
+services:
+  samba:
+    image: dperson/samba@sha256:66088b78a19810dd1457a8f39340e95e663c728083efa5fe7dc0d40b2478e869  # :latest pinned 2026-06
+    container_name: samba
+    restart: unless-stopped
+    # Passwordless guest share (flat-team setup; no SMB auth). The dperson image
+    # already sets `map to guest = bad user` globally, so an unauthenticated client
+    # maps to the guest account; `force user = smbuser` owns whatever guests write.
+    # Note: modern Windows blocks guest SMB by default -- clients must enable
+    # AllowInsecureGuestAuth; Linux mounts need `-o guest`. See README.
+    command: >
+      -s "lab;/share;yes;no;yes"
+      -g "server min protocol = SMB2"
+      -p
+    ports:
+      - "${HOST_IP}:445:445/tcp"
+      - "${HOST_IP}:139:139/tcp"
+    volumes:
+      - ../volumes/share:/share
+    networks:
+      - backend
+    labels:
+      homepage.group: Storage & Packages
+      homepage.name: Samba
+      homepage.icon: samba.png
+      homepage.description: 'SMB share at \\files.${LAB_DOMAIN}\lab'
+      homepage.weight: "30"

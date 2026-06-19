@@ -1,0 +1,23 @@
+# Live Docker log viewer for this stack (https://logs.lab). Reads the Docker socket
+# read-only -- the same access pattern Homepage already uses. No auth (LAN-only), matching
+# the other open services; to lock it down, set DOZZLE_AUTH_PROVIDER + a users file.
+services:
+  dozzle:
+    image: amir20/dozzle@sha256:2e14180fa14c195b8e86705b7ab2234b87599215bcf06f7f56396cb45f57f963  # v10.6.6
+    container_name: dozzle
+    restart: unless-stopped
+    environment:
+      - DOZZLE_NO_ANALYTICS=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - caddy
+    labels:
+      caddy: logs.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      homepage.group: Infrastructure
+      homepage.name: Dozzle
+      homepage.icon: dozzle.png
+      homepage.href: https://logs.${LAB_DOMAIN}
+      homepage.description: Live container logs
+      homepage.weight: "60"

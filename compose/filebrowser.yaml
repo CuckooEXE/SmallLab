@@ -1,0 +1,27 @@
+# Web face for the share (https://files.lab) -- no login (noauth).
+services:
+  filebrowser:
+    image: filebrowser/filebrowser@sha256:dbac07403040895dfb4a06ff3cef2032719695c69d8f02704614e03d7f76b31f  # v2.63.15-s6
+    container_name: filebrowser
+    restart: unless-stopped
+    environment:
+      # Match Samba's smbuser (uid 100, gid 101) and webdav's `user: "100:101"` so all
+      # three consumers of volumes/share agree on ownership. Otherwise filebrowser's s6
+      # init chowns /srv to its PUID and samba/webdav (uid 100) can no longer write.
+      - PUID=100
+      - PGID=101
+    volumes:
+      - ../volumes/share:/srv
+      - ../volumes/filebrowser:/database
+      - ../config/filebrowser/settings.json:/config/settings.json
+    networks:
+      - caddy
+    labels:
+      caddy: files.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Storage & Packages
+      homepage.name: File Browser
+      homepage.icon: filebrowser.png
+      homepage.href: https://files.${LAB_DOMAIN}
+      homepage.description: Web access to the share
+      homepage.weight: "20"

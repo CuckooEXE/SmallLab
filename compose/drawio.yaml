@@ -1,0 +1,20 @@
+# Offline diagram editor (https://draw.lab) -- network maps, attack trees, report figures.
+# Fully client-side: diagrams live in the browser or on your file share, so there is no
+# server-side state and no volume. The image also exposes 8443 (TLS); we proxy plain 8080
+# and let Caddy terminate TLS.
+services:
+  drawio:
+    image: jgraph/drawio@sha256:9200b24bea56be5ffbc5b8cdf179fbe92a426d18bf75a53d7a558f3bb940d97f  # 24.04
+    container_name: drawio
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: draw.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      homepage.group: Tools
+      homepage.name: drawio
+      homepage.icon: drawio.png
+      homepage.href: https://draw.${LAB_DOMAIN}
+      homepage.description: Offline diagram editor
+      homepage.weight: "40"

@@ -1,0 +1,27 @@
+# Secrets vault -- Bitwarden-compatible (https://vault.lab). SQLite DB + attachments
+# persist under volumes/vaultwarden (-> /data); runs as root, so no chown needed. DOMAIN
+# must match the public URL or WebAuthn/attachments break. Signups are ON so you can create
+# the first account -- flip SIGNUPS_ALLOWED to false afterward (or do it from the admin
+# panel). The admin panel is enabled only when VAULTWARDEN_ADMIN_TOKEN is set in .env.
+services:
+  vaultwarden:
+    image: vaultwarden/server@sha256:d626d04934cd1192ad8ced1adb975099fca78cec33ab467d2d3c923cde7f3b0c  # 1.36.0
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      - DOMAIN=https://vault.${LAB_DOMAIN}
+      - SIGNUPS_ALLOWED=true
+      - ADMIN_TOKEN=${VAULTWARDEN_ADMIN_TOKEN:-}
+    volumes:
+      - ../volumes/vaultwarden:/data
+    networks:
+      - caddy
+    labels:
+      caddy: vault.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: Vaultwarden
+      homepage.icon: vaultwarden.png
+      homepage.href: https://vault.${LAB_DOMAIN}
+      homepage.description: Bitwarden-compatible vault
+      homepage.weight: "60"

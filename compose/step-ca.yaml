@@ -1,0 +1,38 @@
+# Internal ACME CA -> issues TLS for every site (Caddy is a client).
+# First boot auto-inits a PKI with an ACME provisioner (named "acme"). The root,
+# keys, and init password persist in volumes/stepca, so restarts are unattended.
+services:
+  step-ca:
+    image: smallstep/step-ca@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270  # step-ca 0.30.2
+    container_name: step-ca
+    restart: unless-stopped
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=${STEPCA_NAME}
+      - DOCKER_STEPCA_INIT_DNS_NAMES=ca.${LAB_DOMAIN},step-ca,localhost
+      - DOCKER_STEPCA_INIT_ACME=true
+      - DOCKER_STEPCA_INIT_PASSWORD=${STEPCA_PASSWORD}
+    dns:
+      - ${HOST_IP}     # resolve *.lab via Technitium so ACME HTTP-01 validation works
+    ports:
+      - "${HOST_IP}:9000:9000"   # ACME dir: https://ca.${LAB_DOMAIN}:9000/acme/acme/directory
+    volumes:
+      - ../volumes/stepca:/home/step
+    healthcheck:
+      # Healthy only once the PKI is initialised -> Caddy waits for this so it never
+      # loads a config that references a not-yet-written acme_ca_root.
+      test: ["CMD-SHELL", "test -f /home/step/certs/root_ca.crt"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    depends_on:
+      - technitium
+    networks:
+      - caddy
+    labels:
+      homepage.group: Infrastructure
+      homepage.name: step-ca
+      homepage.icon: smallstep.png
+      homepage.href: https://ca.${LAB_DOMAIN}:9000/health
+      homepage.description: Internal ACME certificate authority
+      homepage.weight: "40"

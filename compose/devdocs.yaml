@@ -1,0 +1,20 @@
+# Offline API documentation browser (https://devdocs.lab). The image bakes in the full
+# DevDocs docset catalog (Python, C, the Linux man pages, hundreds more), so it's fully
+# offline with no download step and no volume. To trim or refresh docsets later, mount a
+# volume at /devdocs/public/docs and run `docker compose exec devdocs thor docs:download <slug>`.
+services:
+  devdocs:
+    image: ghcr.io/freecodecamp/devdocs@sha256:8623d9b9c6c3ac12bafbd3e378711c6f2d61a0baf23350c9da6e9261b3d66a60  # :latest (rev c797316) pinned 2026-06
+    container_name: devdocs
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: devdocs.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 9292}}"
+      homepage.group: Tools
+      homepage.name: DevDocs
+      homepage.icon: devdocs.png
+      homepage.href: https://devdocs.${LAB_DOMAIN}
+      homepage.description: Offline API documentation
+      homepage.weight: "30"

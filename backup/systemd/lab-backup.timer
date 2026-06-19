@@ -1,0 +1,12 @@
+# Every 3 hours -- the smallest interval in the retention curve. Everything coarser
+# (6h/12h/.../3mo) is produced by thinning these 3-hourly snapshots in `prune`.
+[Unit]
+Description=Run the lab backup pull every 3 hours
+
+[Timer]
+OnCalendar=*-*-* 00/3:00:00
+Persistent=true            # if the box was off at the slot, run at next boot
+RandomizedDelaySec=600     # jitter so it doesn't fire dead-on the hour
+
+[Install]
+WantedBy=timers.target

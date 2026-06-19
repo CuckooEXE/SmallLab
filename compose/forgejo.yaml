@@ -1,0 +1,46 @@
+# Forgejo -- Git forge + universal package registry at packages.lab.
+# One SQLite-backed container serves the web UI, REST API, every package registry
+# (PyPI, npm, Maven, Cargo, NuGet, Go, Helm, RubyGems, Debian, RPM, ...) AND the
+# Docker/OCI registry (/v2/) on a single HTTP port behind Caddy.
+#
+# Headless setup: INSTALL_LOCK skips the web installer and the DB auto-migrates on
+# first boot. bootstrap.sh then creates the admin user and the packages org. Forgejo's
+# own secrets (SECRET_KEY, internal token) are generated on first run into the data
+# volume -- nothing to manage by hand.
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo@sha256:d98d860ea64fd36cb0aabf0b46bbe1a37566b498eee4af0a6b246d5a45759d6d  # 11.0.15 (LTS)
+    container_name: forgejo
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - FORGEJO__server__DOMAIN=packages.${LAB_DOMAIN}
+      - FORGEJO__server__ROOT_URL=https://packages.${LAB_DOMAIN}/
+      - FORGEJO__server__DISABLE_SSH=true        # packages/UI only; no git-over-ssh port
+      - FORGEJO__server__OFFLINE_MODE=true        # no external avatars/CDN -- LAN-friendly
+      - FORGEJO__database__DB_TYPE=sqlite3
+      - FORGEJO__security__INSTALL_LOCK=true       # skip the web install wizard
+      - FORGEJO__security__PASSWORD_COMPLEXITY=off  # let bootstrap seed the .env admin password as-is
+      - FORGEJO__service__DISABLE_REGISTRATION=true   # admin creates users; no self-signup
+      - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false    # anonymous viewing -> anonymous package pull
+      - FORGEJO__packages__ENABLED=true
+    volumes:
+      - ../volumes/forgejo:/data
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/healthz | grep -q pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    labels:
+      caddy: packages.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      homepage.group: Storage & Packages
+      homepage.name: Forgejo
+      homepage.icon: forgejo.png
+      homepage.href: https://packages.${LAB_DOMAIN}
+      homepage.description: Git forge + package registry
+      homepage.weight: "10"

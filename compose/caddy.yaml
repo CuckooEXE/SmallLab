@@ -1,0 +1,34 @@
+# reverse proxy -- terminates all https://*.lab, auto-configured from container labels.
+services:
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy@sha256:58b6e5dd982f873384786177139130c78e55c6ee315d1b2497f89edff8703acb  # ci-alpine (Caddy v2.11.4)
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443/tcp"
+      - "443:443/udp"        # HTTP/3
+    environment:
+      - CADDY_INGRESS_NETWORKS=caddy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../volumes/caddy/data:/data
+      - ../volumes/caddy/config:/config
+      - ../volumes/stepca:/stepca:ro   # read step-ca's root so we trust the ACME endpoint
+    depends_on:
+      step-ca:
+        condition: service_healthy   # wait until step-ca has written its root CA
+    networks:
+      - caddy
+    labels:
+      # Global options (no `caddy:` site key -> emitted outside all server blocks).
+      # Every site gets its certs from step-ca's ACME endpoint.
+      caddy.acme_ca: https://step-ca:9000/acme/acme/directory
+      caddy.acme_ca_root: /stepca/certs/root_ca.crt
+      # Homepage discovers this container from these labels (see config/homepage/docker.yaml)
+      homepage.group: Infrastructure
+      homepage.name: Caddy
+      homepage.icon: caddy.png
+      homepage.href: https://home.${LAB_DOMAIN}
+      homepage.description: TLS reverse proxy
+      homepage.weight: "10"

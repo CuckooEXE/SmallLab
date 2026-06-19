@@ -1,0 +1,28 @@
+# secrets & generated artifacts
+.env
+lab-root-ca.crt
+
+# Runtime data -- every service's state lives under volumes/ (bind mounts).
+# Never checked in; recreate the skeleton on a fresh host (see the README).
+volumes/
+
+# Homepage shares ONE mount (config/homepage) for both its checked-in config and the
+# files it regenerates on first boot. Track only the files we manage; ignore the rest
+# (custom.css/js, kubernetes.yaml, proxmox.yaml, logs/, and any future skeletons).
+config/homepage/*
+!config/homepage/docker.yaml
+!config/homepage/settings.yaml
+!config/homepage/services.yaml
+!config/homepage/widgets.yaml
+!config/homepage/bookmarks.yaml
+
+# Backups live on the dedicated backup server, never in the repo. Ignore any
+# filled-in local config that lands in the working tree (the tracked template is
+# backup/config.env.example).
+backup/archives/
+backup/config.env
+backup/known_hosts
+# transient key material if you stage it here while wiring the two hosts
+id_lab_backup
+id_lab_backup.pub
+lab-backup.pub
