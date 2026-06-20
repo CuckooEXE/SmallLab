@@ -1,0 +1,18 @@
+# HackTricks -- offline pentest methodology wiki (hacktricks.lab). Self-contained image: the
+# English book built with HackTricks' own mdBook toolchain by ./build-refs.sh. Read-only, no state.
+services:
+  hacktricks:
+    image: lab/hacktricks:latest
+    container_name: hacktricks
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: hacktricks.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Reference
+      homepage.name: HackTricks
+      homepage.icon: /icons/hacktricks.svg
+      homepage.href: https://hacktricks.${LAB_DOMAIN}
+      homepage.description: Offline pentest methodology wiki
+      homepage.weight: "34"

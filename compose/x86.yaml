@@ -1,12 +1,10 @@
-# x86 -- offline x86/x64 instruction-set reference (x86.lab). nginx over a static mirror of
-# c9x.me/x86/ in volumes/x86, staged by ./fetch-docs.sh. Read-only, no state.
+# x86 -- offline x86/x64 instruction-set reference (x86.lab). Self-contained image mirroring
+# c9x.me/x86, built by ./build-refs.sh. Read-only, no state.
 services:
   x86:
-    image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine
+    image: lab/x86:latest
     container_name: x86
     restart: unless-stopped
-    volumes:
-      - ../volumes/x86:/usr/share/nginx/html:ro
     networks:
       - caddy
     labels:

@@ -1,0 +1,18 @@
+# DevHints -- offline developer cheatsheets (devhints.lab). Self-contained image: the devhints.io
+# Astro site built from source by ./build-refs.sh. Read-only, no state.
+services:
+  devhints:
+    image: lab/devhints:latest
+    container_name: devhints
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: devhints.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Reference
+      homepage.name: DevHints
+      homepage.icon: /icons/devhints.svg
+      homepage.href: https://devhints.${LAB_DOMAIN}
+      homepage.description: Developer cheatsheets, offline
+      homepage.weight: "39"

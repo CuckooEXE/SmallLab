@@ -105,12 +105,19 @@ get_code "Dozzle          logs.${LAB_DOMAIN}"        "logs.${LAB_DOMAIN}"       
 get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}"  "/"
 # (Forgejo / packages.lab is checked in its own section below)
 
-# Dev tooling + offline references. The doc sites return 200 only once ./fetch-docs.sh has
-# staged their content into volumes/.
+# Dev tooling + offline references. The doc sites return 200 only once ./build-refs.sh has
+# built their images (lab/<name>:latest) and they're present on the host.
 get_code "Compiler Explorer godbolt.${LAB_DOMAIN}"  "godbolt.${LAB_DOMAIN}"     "/"
 get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"      "/"
 get_code "x86 ref         x86.${LAB_DOMAIN}"         "x86.${LAB_DOMAIN}"         "/"
 get_code "tldr            tldr.${LAB_DOMAIN}"        "tldr.${LAB_DOMAIN}"        "/"
+get_code "Syscall tables  syscalls.${LAB_DOMAIN}"   "syscalls.${LAB_DOMAIN}"    "/"
+get_code "DevHints        devhints.${LAB_DOMAIN}"    "devhints.${LAB_DOMAIN}"    "/"
+get_code "ExplainShell    explainshell.${LAB_DOMAIN}" "explainshell.${LAB_DOMAIN}" "/"
+get_code "HackTricks      hacktricks.${LAB_DOMAIN}"  "hacktricks.${LAB_DOMAIN}"  "/"
+get_code "GTFOBins        gtfobins.${LAB_DOMAIN}"    "gtfobins.${LAB_DOMAIN}"    "/"
+get_code "LOLBAS          lolbas.${LAB_DOMAIN}"      "lolbas.${LAB_DOMAIN}"      "/"
+get_code "PayloadsAllTheThings payloads.${LAB_DOMAIN}" "payloads.${LAB_DOMAIN}" "/"
 
 section "step-ca (ACME CA)"
 body="$(curl -sS --max-time 15 --resolve "ca.${LAB_DOMAIN}:9000:${HOST_IP}" --cacert "$CA" "https://ca.${LAB_DOMAIN}:9000/health" 2>/dev/null)"

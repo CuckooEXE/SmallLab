@@ -1,12 +1,10 @@
-# cppreference -- offline C/C++ standard library reference (cppref.lab). nginx over the static
-# PeterFeicht html-book in volumes/cppreference, staged by ./fetch-docs.sh. Read-only, no state.
+# cppreference -- offline C/C++ standard library reference (cppref.lab). Self-contained image
+# built from the PeterFeicht html-book by ./build-refs.sh. Read-only, no state.
 services:
   cppreference:
-    image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine
+    image: lab/cppreference:latest
     container_name: cppreference
     restart: unless-stopped
-    volumes:
-      - ../volumes/cppreference:/usr/share/nginx/html:ro
     networks:
       - caddy
     labels:

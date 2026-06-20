@@ -1,0 +1,20 @@
+# ExplainShell -- offline command-line explainer (explainshell.lab). Parses a shell command and
+# matches each token to its man-page text. The image is built locally from the upstream prod
+# Dockerfile by ./build-refs.sh (tag lab/explainshell:latest), which bakes in the SQLite man-page
+# DB -- so it runs fully offline with no external database. Self-contained; listens on 8080.
+services:
+  explainshell:
+    image: lab/explainshell:latest
+    container_name: explainshell
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: explainshell.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      homepage.group: Tools
+      homepage.name: ExplainShell
+      homepage.icon: /icons/explainshell.svg
+      homepage.href: https://explainshell.${LAB_DOMAIN}
+      homepage.description: Explain shell commands from man pages
+      homepage.weight: "25"

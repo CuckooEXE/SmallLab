@@ -444,18 +444,21 @@ boot), take it back first: `sudo chown -R "$USER" volumes/opengrok/src`.
 
 ---
 
-## Re-stage offline docs
+## Rebuild reference images
 
-**Description.** Refresh the cppreference / x86 / tldr content.
-**When to use.** Updating the offline references. Needs internet (run on a box with it; the
-`tldr` target also needs docker — it builds the PWA in a node container).
+**Description.** Rebuild the offline reference images (each is a self-contained
+`lab/<name>:latest` from `references/<name>/Dockerfile`).
+**When to use.** Refreshing the offline references, or after editing a reference Dockerfile.
+Needs internet + docker (the build clones/downloads each site's content).
 
 ```bash
-./fetch-docs.sh                 # all of them
-./fetch-docs.sh cppreference    # one target
-# if staged elsewhere, rsync the dir(s) into the host's volumes/, then:
-docker compose restart cppreference x86 tldr
+./build-refs.sh                 # all of them
+./build-refs.sh payloads x86    # specific ones
+docker compose up -d            # pick up the rebuilt images
 ```
+
+Built on a separate box? Carry each image to the host with
+`docker save lab/<name>:latest | ssh <host> docker load`, then `docker compose up -d`.
 
 ---
 

@@ -50,6 +50,13 @@ What it accomplishes:
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
 | **x86 ref**    | `https://x86.lab`                               | via Caddy                    | offline x86/x64 instruction reference (mirror of [c9x.me/x86](https://c9x.me/x86/)) |
 | **tldr**       | `https://tldr.lab`                              | via Caddy                    | offline tldr-pages command cheatsheets ([tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA; pages baked into the bundle) |
+| **Syscall tables** | `https://syscalls.lab`                      | via Caddy                    | offline Linux syscall-number table across architectures (Juszkiewicz) |
+| **ExplainShell** | `https://explainshell.lab`                    | via Caddy                    | [explainshell](https://github.com/idank/explainshell) — explains a shell command from its man pages; locally-built image, DB baked in |
+| **DevHints**   | `https://devhints.lab`                          | via Caddy                    | offline developer cheatsheets (built from the [devhints.io](https://github.com/rstacruz/cheatsheets) Astro source) |
+| **HackTricks** | `https://hacktricks.lab`                        | via Caddy                    | offline pentest methodology wiki (mdBook build of [HackTricks](https://github.com/HackTricks-wiki/hacktricks), English) |
+| **GTFOBins**   | `https://gtfobins.lab`                          | via Caddy                    | offline Unix living-off-the-land binaries (built from the [GTFOBins](https://github.com/GTFOBins/GTFOBins.github.io) Jekyll source) |
+| **LOLBAS**     | `https://lolbas.lab`                            | via Caddy                    | offline Windows living-off-the-land binaries (built from the [LOLBAS](https://github.com/LOLBAS-Project/LOLBAS) Jekyll source) |
+| **PayloadsAllTheThings** | `https://payloads.lab`                | via Caddy                    | offline [PayloadsAllTheThings](https://github.com/swisskyrepo/PayloadsAllTheThings) payload/technique reference (its mkdocs-material site, client-side search) |
 
 Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only; Caddy binds
 `0.0.0.0`. DHCP is the exception — it uses host networking on one NIC and starts only under
@@ -63,13 +70,14 @@ compose/              # one file per service -- caddy.yaml, step-ca.yaml, techni
 config/               # checked-in config the services read
   homepage/           #   dashboard config + local icons
   filebrowser/        #   settings.json
-  nginx/              #   WebDAV / tldr nginx config
+  nginx/              #   WebDAV nginx config
   session-control/    #   shared session control plane: app.py + code.json + terminal.json
 profiles/             # baked session profiles, by kind (built by build-profiles.sh)
+references/           # offline reference images, one Dockerfile each (built by build-refs.sh)
 volumes/              # runtime state -- bind mounts, git-ignored, NOT checked in
 bootstrap.sh          # post-`up` DNS + CA + Forgejo wiring (idempotent)
 build-profiles.sh     # build the baked session profile images (staging step)
-fetch-docs.sh         # stage the offline reference content (cppreference, x86, tldr)
+build-refs.sh         # build the offline reference images (staging step)
 ingest-repos.sh       # stage source trees into OpenGrok
 test.sh               # end-to-end smoke test of every service
 backup/               # pull-based backup tooling (runs on the backup server)
@@ -87,7 +95,7 @@ and `../volumes/...` references.
 |--------|--------------|-------------|
 | `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, creates the Forgejo admin user + public org, and registers the Actions runner. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
 | `build-profiles.sh` | Builds the baked code-server / ttyd session profile images from `profiles/<kind>/<name>/`. Needs internet. | In the provisioning window, and whenever you add or edit a session profile. |
-| `fetch-docs.sh` | Stages the offline reference content (cppreference, x86, tldr) into `volumes/`. Needs internet (the tldr target also needs docker). | In the provisioning window, and to refresh the references later. |
+| `build-refs.sh` | Builds the offline reference images from `references/<name>/Dockerfile` (each downloads/builds its content and serves it) into `lab/<name>:latest`, plus `explainshell` from its upstream prod Dockerfile. Needs internet + docker. | In the provisioning window, and to refresh the references later. |
 | `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `search.lab`. |
 | `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, Forgejo packages, sessions). Exits non-zero on any failure. | After install, a restore, or an image bump. |
 | `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
@@ -139,18 +147,18 @@ $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, se
                                           # (getent group docker | cut -d: -f3)
 
 # runtime dirs (bind mounts, git-ignored); a few need specific ownership
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
 sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
-# (the doc dirs are served read-only by nginx; OpenGrok chowns volumes/opengrok/src to uid 1111
-#  on boot, so leave that mount writable — a :ro src makes the container exit.)
+# (OpenGrok chowns volumes/opengrok/src to uid 1111 on boot, so leave that mount writable —
+#  a :ro src makes the container exit.)
 
-# pull every image + stage offline content (needs internet — the air-gap prep window)
+# pull every image + build the local images (needs internet — the air-gap prep window)
 docker compose pull
-./fetch-docs.sh                           # cppreference + x86 + tldr (tldr build needs docker)
+./build-refs.sh                           # offline reference images (needs docker)
 ./build-profiles.sh                       # session profile images (code: Zig/Python; term: base/netutils)
 
 # bring it up and wire DNS + CA + Forgejo (+ register the Actions runner)

@@ -1,0 +1,18 @@
+# Linux Syscall Tables -- offline syscall-number reference (syscalls.lab). Self-contained image
+# mirroring Juszkiewicz's cross-architecture table, built by ./build-refs.sh. Read-only, no state.
+services:
+  syscalls:
+    image: lab/syscalls:latest
+    container_name: syscalls
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: syscalls.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Reference
+      homepage.name: Syscall Tables
+      homepage.icon: /icons/syscalls.svg
+      homepage.href: https://syscalls.${LAB_DOMAIN}
+      homepage.description: Linux syscall numbers, all arches
+      homepage.weight: "38"
