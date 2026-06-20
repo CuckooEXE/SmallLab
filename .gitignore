@@ -2,6 +2,10 @@
 .env
 lab-root-ca.crt
 
+# Python bytecode cache (session-control's app.py is mounted read-only; the cache is host noise)
+__pycache__/
+*.pyc
+
 # Runtime data -- every service's state lives under volumes/ (bind mounts).
 # Never checked in; recreate the skeleton on a fresh host (see the README).
 volumes/

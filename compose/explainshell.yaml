@@ -12,9 +12,9 @@ services:
     labels:
       caddy: explainshell.${LAB_DOMAIN}
       caddy.reverse_proxy: "{{upstreams 8080}}"
-      homepage.group: Tools
+      homepage.group: Reference
       homepage.name: ExplainShell
       homepage.icon: /icons/explainshell.svg
       homepage.href: https://explainshell.${LAB_DOMAIN}
       homepage.description: Explain shell commands from man pages
-      homepage.weight: "25"
+      homepage.weight: "40"   # after devhints (39); the rest of Reference is 30-39

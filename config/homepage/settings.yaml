@@ -11,6 +11,12 @@ layout:
   Infrastructure:
     style: row
     columns: 4
+  Workspaces:
+    style: row
+    columns: 4
+  Terminals:
+    style: row
+    columns: 4
   Tools:
     style: row
     columns: 2

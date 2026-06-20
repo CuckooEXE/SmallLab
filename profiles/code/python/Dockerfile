@@ -1,7 +1,7 @@
 # Python workspace profile -- code-server + Python 3 + Pyright + Ruff.
 #
 # Built at staging (needs internet) by ../../build-profiles.sh; referenced offline
-# thereafter by the control service (config/code-control/profiles.json -> lab/code-python).
+# thereafter by the control plane (config/session-control/code.json -> lab/code-python).
 #
 # Extensions come from Open VSX (code-server's default registry); Microsoft's
 # first-party Python extension is NOT on Open VSX, so we use the Pyright language

@@ -25,7 +25,7 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Restore a snapshot](#restore-a-snapshot)
 - [Enable or disable DHCP](#enable-or-disable-dhcp)
 - [Index code in OpenGrok](#index-code-in-opengrok)
-- [Re-stage offline docs](#re-stage-offline-docs)
+- [Rebuild reference images](#rebuild-reference-images)
 - [Smoke-test and health](#smoke-test-and-health)
 - [Update images and everyday compose](#update-images-and-everyday-compose)
 - [Rename the TLD](#rename-the-tld)

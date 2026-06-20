@@ -1,7 +1,7 @@
 # Zig workspace profile -- code-server + Zig toolchain + ZLS + the Zig extension.
 #
 # Built at staging (needs internet) by ../../build-profiles.sh; referenced offline
-# thereafter by the control service (config/code-control/profiles.json -> lab/code-zig).
+# thereafter by the control plane (config/session-control/code.json -> lab/code-zig).
 #
 # ZLS is built FROM SOURCE with the zig we just installed -- this avoids depending
 # on ZLS release asset URLs (their naming has churned across versions) and keeps the

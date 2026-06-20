@@ -55,7 +55,7 @@ What it accomplishes:
 | **DevHints**   | `https://devhints.lab`                          | via Caddy                    | offline developer cheatsheets (built from the [devhints.io](https://github.com/rstacruz/cheatsheets) Astro source) |
 | **HackTricks** | `https://hacktricks.lab`                        | via Caddy                    | offline pentest methodology wiki (mdBook build of [HackTricks](https://github.com/HackTricks-wiki/hacktricks), English) |
 | **GTFOBins**   | `https://gtfobins.lab`                          | via Caddy                    | offline Unix living-off-the-land binaries (built from the [GTFOBins](https://github.com/GTFOBins/GTFOBins.github.io) Jekyll source) |
-| **LOLBAS**     | `https://lolbas.lab`                            | via Caddy                    | offline Windows living-off-the-land binaries (built from the [LOLBAS](https://github.com/LOLBAS-Project/LOLBAS) Jekyll source) |
+| **LOLBAS**     | `https://lolbas.lab`                            | via Caddy                    | offline Windows living-off-the-land binaries (built from the [LOLBAS](https://github.com/LOLBAS-Project/LOLBAS-Project.github.io) Jekyll source) |
 | **PayloadsAllTheThings** | `https://payloads.lab`                | via Caddy                    | offline [PayloadsAllTheThings](https://github.com/swisskyrepo/PayloadsAllTheThings) payload/technique reference (its mkdocs-material site, client-side search) |
 
 Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only; Caddy binds

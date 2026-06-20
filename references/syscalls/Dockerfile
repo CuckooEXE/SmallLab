@@ -7,6 +7,7 @@ RUN set -eux; \
     wget --page-requisites --convert-links --adjust-extension --no-directories \
          -e robots=off --directory-prefix=/usr/share/nginx/html \
          "https://gpages.juszkiewicz.com.pl/syscalls-table/syscalls.html" || true; \
+    [ -s /usr/share/nginx/html/syscalls.html ]; \
     printf '<!doctype html><meta http-equiv="refresh" content="0; url=syscalls.html">\n' \
           > /usr/share/nginx/html/index.html; \
     apk del wget
