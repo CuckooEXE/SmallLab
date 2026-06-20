@@ -34,21 +34,24 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v rsync >/dev/null 2>&1 || die "rsync not found"
 
-# is SRC remote (user@host:/path)?  -> the part before the first ':' contains no '/'
+# SRC is remote (user@host:/path) when the part before the first ':' contains no '/'.
 SRC_REMOTE=0; SRC_HOST=""
 if [[ "$SRC" == *:* && "${SRC%%:*}" != *"/"* ]]; then
   SRC_REMOTE=1; SRC_HOST="${SRC%%:*}"
 fi
 
-# stamp (UTC) of a snapshot dir name -> epoch seconds, or fail
+# stamp_epoch <dir-name> -- convert a UTC snapshot dir name to epoch seconds, or fail.
 stamp_epoch() {
   local s="$1"
   date -u -d "${s:0:8} ${s:9:2}:${s:11:2}:${s:13:2}" +%s 2>/dev/null
 }
 
-# remote/local docker pause helper for the lab containers
-docker_freeze() {  # $1 = pause|unpause
+# docker_freeze <pause|unpause> -- pause or unpause the project's containers, locally or
+# over SSH if SRC is remote. A failure only warns; it never aborts the backup.
+docker_freeze() {
   local action="$1" cmd
+  # $ids is expanded by the remote/sub shell, not here, so it stays inside single quotes.
+  # shellcheck disable=SC2016
   cmd='ids=$(docker ps -q --filter label=com.docker.compose.project='"$COMPOSE_PROJECT"'); [ -n "$ids" ] && docker '"$action"' $ids || true'
   if [[ "$SRC_REMOTE" == "1" ]]; then
     $SSH_RSH "$SRC_HOST" "$cmd" || warn "docker $action failed on $SRC_HOST"
@@ -57,8 +60,8 @@ docker_freeze() {  # $1 = pause|unpause
   fi
 }
 
-# ---- retention: keep the snapshot nearest each of these ages; delete the rest;
-#      hard-delete anything older than 3 months. (Exactly your interval list.)
+# Retention curve: keep the snapshot nearest each of these ages (seconds) and delete the
+# rest; anything older than CAP is always deleted.
 KEEP_AGES=(
   10800 21600 43200 64800          # 3h 6h 12h 18h
   86400 172800 259200 345600 432000 # 1d 2d 3d 4d 5d
@@ -67,6 +70,8 @@ KEEP_AGES=(
 )
 CAP=7776000                         # 3 months; older than this is always deleted
 
+# prune -- thin DEST to the retention curve, keeping the newest snapshot plus the one
+# nearest each KEEP_AGES target, and deleting everything older than CAP.
 prune() {
   local now dirs=() d ts age t best bestdiff diff
   now="$(date -u +%s)"
@@ -97,7 +102,7 @@ prune() {
   return 0
 }
 
-# ---- single-instance lock ------------------------------------------------------
+# Single-instance lock: refuse to run if another backup holds it.
 exec 9>"$LOCK" || die "cannot open lock $LOCK"
 flock -n 9 || die "another lab-backup is already running"
 
@@ -107,11 +112,12 @@ NEW="$DEST/$TS"
 PREV=""
 [[ -L "$DEST/latest" ]] && PREV="$(readlink -f "$DEST/latest" 2>/dev/null || true)"
 
-# optional freeze for consistent DB copies
+# cleanup -- unpause the containers if we paused them. Runs on EXIT and is also called
+# explicitly once the copy is done. Always returns 0 so it can't trip `set -e`.
 PAUSED=0
 cleanup() {
   if [[ "$PAUSED" == "1" ]]; then docker_freeze unpause; PAUSED=0; fi
-  return 0   # never let a bare `cleanup` call trip `set -e`
+  return 0
 }
 trap cleanup EXIT
 if [[ "$PAUSE_CONTAINERS" == "1" ]]; then

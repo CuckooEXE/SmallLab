@@ -1,11 +1,6 @@
-# Container services are discovered from `homepage.*` labels; this file holds MANUAL
-# (non-container) tiles, which merge with the auto-discovered ones. Keep the file present:
-# if it's missing, Homepage regenerates it with live demo tiles. To show none, set this back
-# to `[]` rather than deleting the file.
-#
-# External links as their own "Links" group (pinned to the top via settings.yaml `layout`).
-# Icons are served LOCALLY (/icons/*.svg), not from a CDN, so they render on the air-gapped
-# LAN -- the same rule every other tile follows.
+# Manual (non-container) tiles; container services come from `homepage.*` labels. Keep the
+# file present (a missing one is regenerated with demo tiles); use `[]` to show none. Icons
+# are served locally (/icons/*) for the air-gapped LAN.
 - Links:
     - Google:
         href: https://google.com

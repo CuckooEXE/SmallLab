@@ -22,6 +22,8 @@ CONFIG="${LAB_BACKUP_CONFIG:-/etc/lab-backup/config.env}"
 
 DEST="${DEST:-}"
 SSH_RSH="${SSH_RSH:-ssh}"
+
+# need_dest -- abort unless DEST (the directory holding the snapshots) is set.
 need_dest() { [[ -n "$DEST" ]] || die "set DEST (directory holding the snapshots) in config or env"; }
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -31,6 +33,8 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v rsync >/dev/null 2>&1 || die "rsync not found"
 
+# do_list -- print the available snapshots in DEST (date, apparent size, name) and where
+# the 'latest' symlink points.
 do_list() {
   need_dest
   [[ -d "$DEST" ]] || die "no snapshot dir at $DEST"
@@ -47,6 +51,9 @@ do_list() {
   return 0
 }
 
+# do_restore <snapshot|latest> [--target DIR | --to host:DIR] [--force] -- rsync a snapshot
+# into a local dir (default RESTORE_TARGET) or a remote host:dir, prompting before it
+# overwrites a non-empty target unless --force is given.
 do_restore() {
   need_dest
   local snap="${1:-}" target="${RESTORE_TARGET:-/opt/lab/volumes}" to="" force=0
@@ -79,13 +86,13 @@ do_restore() {
     dst="$target"; dst_desc="$target (local)"
   fi
 
-  # safety: refuse to clobber a populated target unless --force
+  # Refuse to clobber a populated target unless --force.
   if [[ "$force" != "1" ]]; then
     local nonempty=0
     if [[ "$remote" == "1" ]]; then
-      $SSH_RSH "${to%%:*}" "[ -n \"\$(ls -A '${to#*:}' 2>/dev/null)\" ]" && nonempty=1 || true
-    else
-      [[ -d "$dst" && -n "$(ls -A "$dst" 2>/dev/null)" ]] && nonempty=1
+      if $SSH_RSH "${to%%:*}" "[ -n \"\$(ls -A '${to#*:}' 2>/dev/null)\" ]"; then nonempty=1; fi
+    elif [[ -d "$dst" && -n "$(ls -A "$dst" 2>/dev/null)" ]]; then
+      nonempty=1
     fi
     if [[ "$nonempty" == "1" ]]; then
       warn "target $dst_desc is not empty; restoring will --delete/overwrite it."

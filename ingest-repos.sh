@@ -34,9 +34,11 @@ slug() {
   local b; b="$(basename -- "$1")"
   b="${b%.tar.gz}"; b="${b%.tgz}"; b="${b%.tar.xz}"; b="${b%.tar.bz2}"
   b="${b%.tar}";    b="${b%.zip}"
-  printf '%s' "$b" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '-'
+  printf '%s' "$b" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-'
 }
 
+# ingest <archive-or-dir> -- extract (or copy) the source into volumes/opengrok/src/<slug>,
+# replacing any previous import of the same name.
 ingest() {
   local src="$1" name; name="$(slug "$src")"
   [[ -n "$name" && "$name" != "-" ]] || die "could not derive a project name from: $src"

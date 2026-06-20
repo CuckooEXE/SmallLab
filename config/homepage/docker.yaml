@@ -1,5 +1,3 @@
-# Gives Homepage live container state and enables service discovery: any container
-# with `homepage.*` labels (see compose/*.yaml) appears on the dashboard automatically,
-# with no entry needed in services.yaml.
+# Enables Homepage service discovery: containers with `homepage.*` labels appear automatically.
 my-docker:
   socket: /var/run/docker.sock

@@ -1,9 +1,6 @@
-# File share over HTTP (curl) -- stock nginx over the SAME share as Samba/FileBrowser,
-# so you can GET/PUT/DELETE files with plain curl: curl -T ./f https://dav.lab/some/dir/
-# nginx's built-in WebDAV module covers PUT/DELETE/MKCOL/COPY/MOVE; GET/HEAD serve files
-# and HTML directory listings (autoindex). POST is not supported by the module.
-# Config is config/nginx/nginx.conf. Runs as 100:101 (Samba's smbuser) so files dropped
-# over HTTP are interoperable with the SMB share. No auth.
+# WebDAV -- HTTP face on the same share as Samba/FileBrowser (dav.lab). nginx's WebDAV module
+# serves GET/PUT/DELETE/MKCOL/COPY/MOVE (no POST) over volumes/share via config/nginx/nginx.conf.
+# Runs as 100:101 (Samba's smbuser) so files interoperate across SMB/HTTP. No auth.
 services:
   webdav:
     image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine

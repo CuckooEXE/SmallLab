@@ -1,13 +1,7 @@
-# NTP -- LAN time source for *.lab clients. chrony serves the host clock as a *local
-# stratum*, so it answers clients even with no reachable upstream (the air-gapped case --
-# verified). Correct time is a hard dependency elsewhere in the stack: step-ca cert
-# validity (notBefore/notAfter), Vaultwarden TOTP (+/-30s windows), and SMB/Kerberos auth
-# all break on client clock drift, and an offline LAN has no public NTP to fall back on.
-#
-# Unicast service (client -> HOST_IP:123), so a published port on the bridge is enough --
-# unlike DHCP, NTP needs no host networking. The container does NOT step the host clock
-# (no SYS_TIME cap): the host's own clock is the reference it re-serves to the LAN, so keep
-# the host clock correct (its own timesync when online; RTC when fully offline).
+# NTP -- LAN time source for *.lab clients (ntp.lab = HOST_IP:123). chrony serves the host
+# clock as a local stratum, so it answers even with no upstream (air-gapped). Correct time is
+# required by step-ca (cert validity), Vaultwarden TOTP, and SMB/Kerberos. Does not step the
+# host clock (no SYS_TIME) -- keep the host clock correct and the LAN inherits it.
 services:
   ntp:
     image: cturra/ntp@sha256:7224d4e7c7833aabbcb7dd70c46c8a8dcccda365314c6db047b9b10403ace3bc  # :latest pinned 2026-06
@@ -15,8 +9,7 @@ services:
     hostname: ntp
     restart: unless-stopped
     environment:
-      # Upstreams to discipline the host view WHEN online; offline, chrony falls back to
-      # `local stratum 10` and keeps serving. Override NTP_SERVERS in .env (space/comma list).
+      # Upstreams used only when online; offline chrony serves local stratum 10. Override in .env.
       - NTP_SERVERS=${NTP_SERVERS:-pool.ntp.org}
     ports:
       - "${HOST_IP}:123:123/udp"

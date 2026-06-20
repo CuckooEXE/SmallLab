@@ -1,8 +1,6 @@
-# Encrypted pastebin (https://paste.lab) -- share snippets/loot in-lab; everything is
-# encrypted client-side, the server only ever sees ciphertext. The filesystem backend
-# persists pastes under volumes/privatebin (-> /srv/data). The php-fpm worker runs as
-# uid 65534 / gid 82, so that dir must be owned 65534:82 (see the README quick start).
-# Tune size/expiry by mounting a conf.php at /srv/cfg/conf.php.
+# PrivateBin -- client-side-encrypted pastebin (paste.lab); the server stores only ciphertext.
+# Pastes persist under volumes/privatebin (/srv/data); php-fpm runs as uid 65534/gid 82, so
+# that dir must be owned 65534:82.
 services:
   privatebin:
     image: privatebin/nginx-fpm-alpine@sha256:f4a6e55a7410a6640411cdf532d43f6206d147ed63da484ea0a02c3afaf5a6c0  # 2.0.4

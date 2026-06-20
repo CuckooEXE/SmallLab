@@ -1,15 +1,7 @@
 # OpenGrok -- source cross-reference + full-text code search (search.lab). A Tomcat webapp
-# (port 8080) backed by a universal-ctags symbol index + a Lucene full-text index: click a
-# type/function/variable to jump to its definition, or search across everything.
-#
-# READ-ONLY and ANONYMOUS -- no login. That's why it replaced Sourcebot here: it fits the
-# stack's LAN-trust model (like Forgejo's anon view / code-server --auth none). Drop source
-# trees under volumes/opengrok/src/<name> with ./ingest-repos.sh; the indexer picks them up on
-# startup and every SYNC_PERIOD_MINUTES.
-#
-# AIR-GAP: indexes with the bundled universal-ctags + Lucene -- nothing is fetched at runtime,
-# and NOMIRROR stops the indexer from ever pulling from an SCM remote (so a dropped repo that
-# still carries its .git won't phone home). Pin the image digest during the prepull window.
+# (8080) over a universal-ctags symbol index + Lucene full-text index. Read-only, anonymous.
+# Drop source trees under volumes/opengrok/src/<name> with ./ingest-repos.sh; indexed on
+# startup and every SYNC_PERIOD_MINUTES. Air-gapped: NOMIRROR blocks any pull from an SCM remote.
 services:
   opengrok:
     image: opengrok/docker@sha256:454c9210af6fc24b10d2684fbceef8a10f5f9e70608aa9e292f093396497cf18  # 1.14.15
@@ -17,23 +9,21 @@ services:
     restart: unless-stopped
     environment:
       - SYNC_PERIOD_MINUTES=15   # incremental reindex cadence (also indexes once on startup); 0 = off
-      - NOMIRROR=1               # air-gap: never pull from an SCM remote, just index what's on disk
+      - NOMIRROR=1               # never pull from an SCM remote (air-gap)
     volumes:
-      # src MUST be writable: the entrypoint chowns /opengrok/src to its appuser (uid 1111) on
-      # every boot, so a :ro mount makes the container exit at startup (-> Caddy 502).
+      # must stay writable: the entrypoint chowns it to uid 1111 on boot
       - ../volumes/opengrok/src:/opengrok/src      # source to index (./ingest-repos.sh writes here)
       - ../volumes/opengrok/data:/opengrok/data    # Lucene + xref index
       - ../volumes/opengrok/etc:/opengrok/etc      # generated configuration.xml (persisted)
     networks:
       - caddy
     healthcheck:
-      # /api/v1/system/ping answers 200 once the webapp is deployed (curl ships in the image).
-      # Catches the crash-loop case -- e.g. a :ro src mount -- as "unhealthy" instead of a silent 502.
+      # 200 once the webapp is deployed; surfaces crash-loops as unhealthy
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/v1/system/ping"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 60s   # Tomcat deploy + first index; don't flap "unhealthy" during boot
+      start_period: 60s   # Tomcat deploy + first index
     labels:
       caddy: search.${LAB_DOMAIN}
       caddy.reverse_proxy: "{{upstreams 8080}}"

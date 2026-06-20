@@ -1,6 +1,5 @@
-# S3-compatible object storage (+ console).
-# Pinned to the last release that ships a full admin console. Swap to `minio/minio`
-# if you only need the S3 API + the `mc` CLI.
+# MinIO -- S3-compatible object storage + console (s3.lab, s3-console.lab). Pinned to the last
+# release with a full admin console.
 services:
   minio:
     image: quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e  # RELEASE.2025-04-22T22-12-26Z

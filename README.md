@@ -1,16 +1,24 @@
-# `.lab` homelab stack
+# SmallLab
 
-A single `docker compose` stack that gives a LAN its own `.lab` TLD with real, trusted
-HTTPS, a dashboard, DNS, a universal package registry, object storage, a file share, and
-a couple of offline tooling apps.
+SmallLab is a single `docker compose` stack that turns one Linux host into a self-contained
+`.lab` environment for a LAN: trusted HTTPS on every service, a dashboard, DNS, NTP, a
+universal package registry, object storage, a file share, on-demand dev sessions, and a shelf
+of offline references — from one repo, with no runtime dependency on the public internet.
 
-The cert story is the interesting part: **step-ca** runs an internal ACME CA and **Caddy
-enrolls every site with it**, so there's exactly **one root to trust** on each client.
-Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA together.
+What it accomplishes:
 
-> **Operating it:** day-two procedures — deploying the two servers from scratch, adding
-> or removing a service, backup/restore, issuing a cert from the CA, adding DNS records —
-> live in **[`Playbook.md`](Playbook.md)**.
+- **One TLD, real certs.** step-ca runs an internal ACME CA and Caddy enrolls every site with
+  it, so each client trusts a single root and gets warning-free HTTPS for `*.lab`.
+- **No per-service wiring.** Technitium resolves `*.lab` to the host, Caddy discovers sites
+  from container labels, and the dashboard builds itself from the same labels — adding a
+  service is one compose file.
+- **Runs offline.** Images are pinned by digest, references and docs are staged ahead of time,
+  and the stack serves its own DNS, time, and packages, so it works on an air-gapped LAN.
+- **Reproducible.** Everything but `volumes/`, `.env`, and the exported CA is in git; backups
+  are plain rsync snapshots.
+
+> Day-two operations — onboarding clients, adding services, backups, issuing certs, and using
+> each service — are in **[`Playbook.md`](Playbook.md)**.
 
 ## Services
 
@@ -36,17 +44,16 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **Vaultwarden**| `https://vault.lab`                             | via Caddy                    | Bitwarden-compatible secrets vault |
 | **Dozzle**     | `https://logs.lab`                              | via Caddy                    | live Docker log viewer for this stack |
 | **Compiler Explorer** | `https://godbolt.lab`                    | via Caddy                    | [Compiler Explorer](https://github.com/compiler-explorer/compiler-explorer) (Godbolt) — interactive source→asm |
+| **OpenGrok**   | `https://search.lab`                            | via Caddy                    | source cross-reference + full-text code search over local repos (`./ingest-repos.sh`); read-only, no login |
 | **Code Workspaces** | `https://code.lab`, sessions at `https://<name>.code.lab` | via Caddy        | on-demand [code-server](https://github.com/coder/code-server) sessions — create / open / stop / delete from a tiny UI; baked per-language profiles. **No login** (shared) |
 | **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
 | **x86 ref**    | `https://x86.lab`                               | via Caddy                    | offline x86/x64 instruction reference (mirror of [c9x.me/x86](https://c9x.me/x86/)) |
 | **tldr**       | `https://tldr.lab`                              | via Caddy                    | offline tldr-pages command cheatsheets ([tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA; pages baked into the bundle) |
 
-Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only, so they
-don't collide with `systemd-resolved` on `127.0.0.53` or a host smbd. Caddy binds `0.0.0.0`.
-The opt-in **DHCP** service is the one exception: DHCP DISCOVER is an L2 broadcast a
-bridged container never sees, so dnsmasq uses **host networking** (bound to one NIC) and
-only starts under `--profile dhcp` — see [Zero-config clients](#zero-config-clients-dhcp).
+Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only; Caddy binds
+`0.0.0.0`. DHCP is the exception — it uses host networking on one NIC and starts only under
+`--profile dhcp`.
 
 ## Repository layout
 
@@ -54,509 +61,164 @@ only starts under `--profile dhcp` — see [Zero-config clients](#zero-config-cl
 compose.yaml          # root: project name, shared networks, `include:` of the files below
 compose/              # one file per service -- caddy.yaml, step-ca.yaml, technitium.yaml, ...
 config/               # checked-in config the services read
-  homepage/           #   dashboard config (+ files Homepage regenerates, git-ignored)
+  homepage/           #   dashboard config + local icons
   filebrowser/        #   settings.json
-  nginx/              #   WebDAV nginx.conf (mounted into the official nginx image)
+  nginx/              #   WebDAV / tldr nginx config
   session-control/    #   shared session control plane: app.py + code.json + terminal.json
 profiles/             # baked session profiles, by kind (built by build-profiles.sh)
-  code/zig/ code/python/   #   FROM code-server + toolchain/extensions
-  term/base/ term/netutils/ #  FROM ttyd + tmux/CLI tools
 volumes/              # runtime state -- bind mounts, git-ignored, NOT checked in
-  caddy/ stepca/ technitium/ forgejo/ filebrowser/ minio/ share/ code/ term/
 bootstrap.sh          # post-`up` DNS + CA + Forgejo wiring (idempotent)
 build-profiles.sh     # build the baked session profile images (staging step)
-.env                  # secrets + HOST_IP + LAB_DOMAIN (git-ignored; copy from .env.example)
-backup/               # pull-based backup tooling (runs on the backup server)
-Playbook.md           # day-two operations
+fetch-docs.sh         # stage the offline reference content (cppreference, x86, tldr)
+ingest-repos.sh       # stage source trees into OpenGrok
 test.sh               # end-to-end smoke test of every service
+backup/               # pull-based backup tooling (runs on the backup server)
+.env                  # secrets + HOST_IP + LAB_DOMAIN (git-ignored; copy from .env.example)
+Playbook.md           # day-two operations
 ```
 
-`docker compose` auto-discovers `compose.yaml` and merges every file under `compose/`
-via `include:`. Paths inside an included file resolve **relative to that file**, which is
-why they point at `../config/...` and `../volumes/...`. Each service keeps its runtime
-state under `volumes/<service>/`, so all stateful data is one git-ignored tree.
+`docker compose` auto-discovers `compose.yaml` and merges every file under `compose/` via
+`include:`. Paths in an included file resolve relative to that file, hence the `../config/...`
+and `../volumes/...` references.
 
-## Quick start
+## Scripts
+
+| Script | What it does | When to use |
+|--------|--------------|-------------|
+| `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, creates the Forgejo admin user + public org, and registers the Actions runner. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
+| `build-profiles.sh` | Builds the baked code-server / ttyd session profile images from `profiles/<kind>/<name>/`. Needs internet. | In the provisioning window, and whenever you add or edit a session profile. |
+| `fetch-docs.sh` | Stages the offline reference content (cppreference, x86, tldr) into `volumes/`. Needs internet (the tldr target also needs docker). | In the provisioning window, and to refresh the references later. |
+| `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `search.lab`. |
+| `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, Forgejo packages, sessions). Exits non-zero on any failure. | After install, a restore, or an image bump. |
+| `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
+| `backup/lab-restore.sh` | Lists snapshots and restores one into a host's `volumes/`. | Disaster recovery or seeding a new host. |
+
+Usage details and the procedures that wrap these scripts are in [`Playbook.md`](Playbook.md).
+
+## Install
+
+SmallLab runs on two servers: a **docker host** (the whole stack) and a **backup server**
+(pulls rsync snapshots from the host, so the host can't reach or wipe the backups). The
+canonical checkout path is `/opt/lab`.
+
+| Role | Hostname (example) | Runs |
+|------|--------------------|------|
+| **Docker host** | `dockerhost.lab` (`192.168.1.171`) | the whole compose stack |
+| **Backup server** | `backup.lab` | pulls rsync snapshots from the docker host |
+
+### Docker host
+
+Fresh Debian/Ubuntu box, run as a user with `sudo`.
 
 ```bash
-# 1. secrets / host IP
-cp .env.example .env
-$EDITOR .env          # set HOST_IP to this box, change the change-me passwords, AND set
-                      # DOCKER_GID (getent group docker | cut -d: -f3)
+# packages: Docker Engine + compose plugin, plus rsync and an ssh server
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git rsync openssh-server
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER" && newgrp docker     # run docker without sudo
+# (Ubuntu: swap the two `debian` strings above for `ubuntu`.)
+```
 
-# 2. on a FRESH host, create the runtime dirs (bind mounts, git-ignored). Most
-#    services run as root; a few don't: own those to match before first `up`.
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term}
+```bash
+# get the repo
+sudo mkdir -p /opt/lab && sudo chown "$USER" /opt/lab
+git clone <your-repo-url> /opt/lab        # or copy the tree in: rsync/scp/usb
+cd /opt/lab
+
+# secrets + host IP (.env is git-ignored; create from the template)
+cp .env.example .env
+$EDITOR .env                              # set HOST_IP to THIS box's LAN IP, set the change-me
+                                          # passwords, keep LAB_DOMAIN=lab, and set DOCKER_GID
+                                          # (getent group docker | cut -d: -f3)
+
+# runtime dirs (bind mounts, git-ignored); a few need specific ownership
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term,opengrok/src,opengrok/data,opengrok/etc}
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
 sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
-# (the doc dirs are served read-only by nginx.)
+# (the doc dirs are served read-only by nginx; OpenGrok chowns volumes/opengrok/src to uid 1111
+#  on boot, so leave that mount writable — a :ro src makes the container exit.)
 
-# 2b. stage offline docs content (cppreference + x86). Needs internet -- run it in the
-#     ONLINE provisioning window, like `docker compose pull`.
-./fetch-docs.sh
+# pull every image + stage offline content (needs internet — the air-gap prep window)
+docker compose pull
+./fetch-docs.sh                           # cppreference + x86 + tldr (tldr build needs docker)
+./build-profiles.sh                       # session profile images (code: Zig/Python; term: base/netutils)
 
-# 2c. build the baked session profile images (code: Zig/Python; terminal: base/netutils).
-#     Needs internet -- same online window; pulls the code-server + ttyd bases and bakes
-#     each profile. The control planes' own base (python:slim) comes from `docker compose pull`.
-./build-profiles.sh
-
-# 3. bring it up  (run from this dir; it finds compose.yaml + .env automatically)
+# bring it up and wire DNS + CA + Forgejo (+ register the Actions runner)
 docker compose up -d
-
-# 4. configure DNS + export the root CA + kick Caddy to issue certs + set up Forgejo
-#    (also registers the Forgejo Actions runner)
 ./bootstrap.sh
 ```
 
-`bootstrap.sh` waits for Technitium, creates the `lab` zone, points `*.lab` and `lab`
-at `HOST_IP`, exports step-ca's root to `./lab-root-ca.crt`, restarts Caddy so it issues
-certs, and creates the Forgejo admin user + public packages org. It's idempotent.
+`bootstrap.sh` creates the `lab` DNS zone, points `*.lab` + `lab` at `HOST_IP`, exports the
+root CA to `./lab-root-ca.crt`, restarts Caddy to issue certs, and creates the Forgejo admin
+user + public packages org. It is idempotent — re-run it any time. HTTPS goes valid a few
+moments **after** bootstrap, not at `up` (step-ca needs the DNS records to validate each name).
 
-> **Cert timing:** HTTPS goes valid a few moments *after* `bootstrap.sh` runs, not at
-> `up`. step-ca validates each `*.lab` name over HTTP-01, which needs the DNS records
-> that bootstrap creates. If a site shows a cert error right after `up`, run bootstrap
-> (or `docker compose restart caddy`) and give it ~30s.
-
-## Client setup (once per machine that uses the lab)
-
-Two things on each client: **resolve `*.lab`** and **trust the root CA** so HTTPS
-doesn't warn. `192.168.1.171` below is the lab host (`HOST_IP` from `.env`).
-
-### Trust the root CA
-
-`bootstrap.sh` wrote `lab-root-ca.crt` next to the compose file — copy it to the client, then:
+Verify, then onboard clients (see [Playbook → Onboard a client](Playbook.md#onboard-a-client)):
 
 ```bash
-# Linux
-sudo cp lab-root-ca.crt /usr/local/share/ca-certificates/lab-ca.crt && sudo update-ca-certificates
-# macOS
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain lab-root-ca.crt
-# Windows (elevated)
-certutil -addstore -f Root lab-root-ca.crt
+docker compose ps           # every service Up (Forgejo takes a few seconds to migrate)
+./test.sh                   # end-to-end smoke test
 ```
 
-Linux/macOS browsers use the system store; **Firefox has its own** — import it there too.
-Docker needs the CA as well to push to Forgejo's registry (see [Using Forgejo](#using-forgejo-packages)).
+> **Firewall:** if the host runs one, allow inbound `80`, `443/tcp+udp`, `53/tcp+udp`,
+> `123/udp`, `445/tcp`, `139/tcp`, `9000/tcp`, and `22/tcp` (backup pull). With the DHCP
+> profile on, also allow `67/udp` on the LAN NIC.
 
-### Resolve `*.lab`
+### Backup server
 
-Simplest: point the machine's (or router's) resolver at `192.168.1.171`. Technitium is
-authoritative for `*.lab` and forwards everything else to `1.1.1.1` / `9.9.9.9` — so the
-box's *entire* DNS runs through the lab host.
-
-To keep your normal resolver and send **only `*.lab`** to the lab, use split DNS — pure
-client config, nothing changes on the server. (A second `nameserver` line in `resolv.conf`
-does **not** do this: multiple `nameserver`s are failover across *all* lookups, not
-per-domain routing. You need a resolver that understands per-domain rules.)
-
-- **Linux + systemd-resolved** (active when `resolvectl status` shows `resolv.conf mode:
-  stub`). `~lab` is a routing-only domain — `*.lab` goes to the lab and isn't added as a
-  search suffix:
-  ```bash
-  IFACE=$(ip route get 192.168.1.171 | grep -oP 'dev \K\S+')
-  resolvectl dns "$IFACE" 192.168.1.171 && resolvectl domain "$IFACE" '~lab'   # runtime only
-  ```
-  Persist it on the managing connection — NetworkManager:
-  `nmcli con mod "<con>" +ipv4.dns 192.168.1.171 +ipv4.dns-search '~lab' && nmcli con up "<con>"`;
-  or systemd-networkd: `DNS=192.168.1.171` + `Domains=~lab` in the link's `.network` file.
-
-- **Linux without systemd-resolved** (local `dnsmasq` stub; works no matter how
-  `resolv.conf` is managed — the one `server=/lab/` line is the whole feature):
-  ```bash
-  sudo apt install -y dnsmasq
-  echo 'server=/lab/192.168.1.171' | sudo tee /etc/dnsmasq.d/lab.conf && sudo systemctl restart dnsmasq
-  # then point resolv.conf at 127.0.0.1 if dnsmasq isn't already the system resolver
-  ```
-
-- **macOS** (per-domain resolver file):
-  ```bash
-  echo "nameserver 192.168.1.171" | sudo tee /etc/resolver/lab
-  ```
-  Verify with `ping -c1 home.lab` — `dig`/`nslookup` **bypass** `/etc/resolver`; use
-  `ping`, `curl`, or `dscacheutil -q host -a name home.lab`.
-
-- **Windows + NRPT** (elevated PowerShell; leading dot matches all `*.lab`):
-  ```powershell
-  Add-DnsClientNrptRule -Namespace ".lab" -NameServers "192.168.1.171"
-  Get-DnsClientNrptRule | ? Namespace -eq ".lab" | Remove-DnsClientNrptRule   # undo
-  ```
-  Push fleet-wide via Group Policy: *Computer Config → Policies → Windows Settings → Name
-  Resolution Policy*.
-
-## Time (NTP)
-
-An air-gapped LAN has no public NTP to reach, and clock drift quietly breaks the rest of
-the stack: step-ca rejects certs outside their validity window, Vaultwarden TOTP falls
-outside its ±30s window, and SMB/Kerberos auth fails past its skew tolerance. The **NTP**
-service (chrony) closes that gap — it serves the docker host's clock to the LAN as a
-*local stratum*, so it answers clients **even with no upstream reachable**. It comes up
-with the stack; point clients at `HOST_IP` (or let DHCP do it):
+Pulls snapshots from the docker host. Run as `root` (reading the host's `volumes/` needs root
+on both ends).
 
 ```bash
-# Linux (chrony):  echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sudo systemctl restart chrony
-# Linux (systemd-timesyncd):  sudo sh -c 'echo -e "[Time]\nNTP=192.168.1.171" > /etc/systemd/timesyncd.conf.d/lab.conf' && sudo systemctl restart systemd-timesyncd
-# one-shot check from any client:
-chronyc -h 192.168.1.171 tracking     # or: ntpdate -q 192.168.1.171
+sudo apt-get update && sudo apt-get install -y rsync openssh-client git
+sudo git clone <your-repo-url> /opt/lab          # for the backup/ scripts (or copy them)
+
+# 1. give this box an ssh key the docker host trusts (root, to read all of volumes/)
+ssh-keygen -t ed25519 -f /root/.ssh/lab-backup -N ''
+ssh-copy-id -i /root/.ssh/lab-backup root@dockerhost.lab
+
+# 2. config
+sudo install -d /etc/lab-backup
+sudo cp /opt/lab/backup/config.env.example /etc/lab-backup/config.env
+sudoedit /etc/lab-backup/config.env
+#   SRC=root@dockerhost.lab:/opt/lab/volumes
+#   DEST=/backups/lab               (this box's disk or a mounted NAS)
+#   SSH_RSH="ssh -i /root/.ssh/lab-backup -o BatchMode=yes -o StrictHostKeyChecking=yes"
+#   RESTORE_TARGET=/opt/lab/volumes
+
+# 3. install the scripts + the every-3-hours timer
+sudo install -m755 /opt/lab/backup/lab-backup.sh  /opt/lab-backup/lab-backup.sh
+sudo install -m755 /opt/lab/backup/lab-restore.sh /opt/lab-backup/lab-restore.sh
+sudo cp /opt/lab/backup/systemd/lab-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now lab-backup.timer
+
+# 4. prove it works now
+sudo /opt/lab-backup/lab-backup.sh
+/opt/lab-backup/lab-restore.sh list
 ```
 
-`NTP_SERVERS` in `.env` lists upstreams used to discipline the host's *own* clock when it
-happens to have internet; offline they're ignored and the host clock (RTC) is the
-reference. The container never steps the host clock — keep the host's time correct and the
-whole LAN inherits it.
-
-## Zero-config clients (DHCP)
-
-Every client needs the same two things — resolve `*.lab` (DNS → `HOST_IP`) and sync time
-(NTP → `HOST_IP`). The opt-in **DHCP** service hands both out automatically (DHCP options
-6 and 42, plus the `lab` domain), so a machine that just joins the LAN is configured with
-no per-client steps. It's **off by default** and ships disabled behind a compose profile:
-
-```bash
-# 1. set the DHCP_* block in .env (LAN NIC, address range, gateway, lease) to match the LAN
-# 2. start it alongside the running stack:
-docker compose --profile dhcp up -d        # brings up the `dhcp` container; leaves others alone
-docker compose --profile dhcp down dhcp    # stop just DHCP (or: docker compose rm -sf dhcp)
-```
-
-> **One DHCP server per broadcast domain.** Only run this if **this host is the LAN's sole
-> DHCP authority** — two servers on one segment fight. If a router already does DHCP, leave
-> this off and instead set the router's DNS (option 6) and NTP (option 42) to `HOST_IP`:
-> same result, no second server. dnsmasq here runs DHCP-only (`--port=0`), so it never
-> competes with Technitium for DNS.
-
-Clients still need to **trust the root CA** (DHCP can't push that) — see below.
-
-## How TLS works (step-ca)
-
-- step-ca auto-initializes a PKI on first boot (root + intermediate + an ACME
-  provisioner named `acme`), persisted in `volumes/stepca/`.
-- Caddy is configured **globally** (labels on the caddy container) with
-  `acme_ca https://step-ca:9000/acme/acme/directory` and `acme_ca_root` pointed at
-  step-ca's root (shared into Caddy read-only). No per-site `tls internal`.
-- Other machines/devices/scripts can use the **same** CA directly at
-  `https://ca.lab:9000/acme/acme/directory` (any ACME client, mTLS, SSH certs, …).
-- **Cert lifetime is 90 days** (`bootstrap.sh` sets the ACME provisioner's
-  `defaultTLSCertDuration`/`maxTLSCertDuration` to `2160h`; Caddy auto-renews at ~2/3
-  life). Override with `STEPCA_CERT_TTL=720h ./bootstrap.sh`.
-
-Issuing a cert by hand from the CA (for a non-Caddy host or device) is in
-[`Playbook.md`](Playbook.md#issue-a-cert-from-the-ca).
-
-## Using Forgejo (packages)
-
-Forgejo at `https://packages.lab` is a Git forge with a built-in universal package
-registry — a Docker/OCI registry plus PyPI, npm, Maven, Cargo, NuGet, Go, Helm, RubyGems,
-Debian, RPM, … — all on one host, free, no license. **`bootstrap.sh` does the first-run
-setup**: it creates the admin user (the shared `LAB_USER` / `LAB_PASSWORD` from
-`.env`) and a **public** org named after `LAB_DOMAIN`, so anonymous pull/download works the
-moment the stack is up. Packages are created on first push — there's no per-format repo to
-pre-create. Uploads authenticate as the admin (or a token you mint in the UI under *Settings
-→ Applications*); a public org's packages download anonymously.
-
-Docker verifies registry TLS strictly, so trust the CA, then push with a login and pull
-anonymously:
-
-```bash
-sudo mkdir -p /etc/docker/certs.d/packages.lab
-sudo cp lab-root-ca.crt /etc/docker/certs.d/packages.lab/ca.crt
-
-docker login packages.lab                              # admin creds or a token (push needs auth)
-docker tag alpine packages.lab/lab/alpine:latest       # packages.lab/<org>/<image>
-docker push packages.lab/lab/alpine:latest
-docker pull packages.lab/lab/alpine:latest             # public org -> no login needed
-```
-
-PyPI (note the `/api/packages/<org>/pypi` base):
-
-```bash
-twine upload --repository-url https://packages.lab/api/packages/lab/pypi -u labadmin dist/*
-pip install --index-url https://packages.lab/api/packages/lab/pypi/simple <pkg>   # anonymous
-```
-
-The per-format endpoints (npm, Maven, Cargo, …) are documented at
-[Forgejo packages](https://forgejo.org/docs/latest/user/packages/); they all hang off
-`https://packages.lab/api/packages/<org>/`.
-
-> **Anonymous access:** download/pull works because the org is **public**. Uploads always
-> authenticate. Change the admin password in the UI afterward and mirror it in `.env` so a
-> re-run of `bootstrap.sh` keeps working.
-
-## Forgejo Actions (CI)
-
-`compose/forgejo-runner.yaml` adds an Actions runner — the CI half of the forge. It registers
-to Forgejo over the internal network and executes workflows, running each job as a **sibling
-container on the `caddy` network** (so jobs reach `http://forgejo:3000` for checkout and
-package pulls without leaving the host). `bootstrap.sh` registers it automatically with
-Forgejo's **shared-secret** flow (no token round-trip): a 40-hex secret in
-`volumes/forgejo-runner/secret` is the runner's identity, registered idempotently on both
-sides. Re-running bootstrap is safe.
-
-A minimal workflow (`.forgejo/workflows/ci.yml` in a repo):
-
-```yaml
-on: [push]
-jobs:
-  build:
-    runs-on: docker          # -> the `docker` label -> runs in node:22-bookworm
-    steps:
-      - run: echo "built on $(uname -a)"
-```
-
-**Air-gapped caveats** — workflows need *content* that isn't on the box by default:
-
-- **`runs-on:` images must exist locally.** `runs-on: docker` runs the job in
-  `node:22-bookworm` (set in `config/forgejo-runner/config.yaml`). Offline, `docker pull` it
-  once on the dev box, push it into Forgejo's registry, and pre-pull it on the host — the
-  runner is set `force_pull: false` and won't fetch it. `runs-on: host` runs a job directly on
-  the runner with no image.
-- **Reusable actions** (`uses: actions/checkout@v4`) resolve from **this forge**
-  (`FORGEJO__actions__DEFAULT_ACTIONS_URL=self`), not the internet. Mirror the action repos
-  into a Forgejo org (e.g. push to `packages.lab/actions/checkout`), or skip `uses:` and clone
-  with a plain `run:` git step.
-- **Labels / capacity** live in `config/forgejo-runner/config.yaml`; edit then
-  `docker compose restart forgejo-runner`.
-
-> **Trust:** the runner drives the host Docker socket, so a workflow author can reach root on
-> the host — the same posture as Dozzle/Homepage (which already mount the socket) on this
-> LAN-only stack. For stronger isolation, switch to a docker-in-docker runner (see Playbook).
-
-## Compiler Explorer
-
-[Compiler Explorer](https://godbolt.lab) (Godbolt) shows how source lowers to assembly across
-compilers and flags. The image bundles a set of C/C++ compilers. **Air-gapped:** CE's "fetch
-more compilers" pulls toolchains from the internet, so offline you get what's in the image. To
-add your own (a vendor cross-compiler, a specific gcc/clang), mount the toolchain into the
-container and extend CE's compiler config — see
-[Adding a compiler](https://github.com/compiler-explorer/compiler-explorer/blob/main/docs/AddingACompiler.md).
-
-## On-demand sessions (code workspaces + terminals)
-
-Two tiny control planes let anyone spin up, come back to, and tear down throwaway
-containers from a browser — **no login**, so everyone sees every session and opening the
-same URL is how you pair on it:
-
-- [`https://code.lab`](https://code.lab) — **[code-server](https://github.com/coder/code-server)
-  workspaces** (browser VS Code, integrated terminal included), sessions at `<name>.code.lab`.
-- [`https://terminal.lab`](https://terminal.lab) — **browser terminals** ([ttyd](https://github.com/tsl0922/ttyd)
-  running `tmux`), sessions at `<name>.terminal.lab`. A reconnect or a second tab reattaches
-  the **same tmux session**, so terminals survive disconnects and are shareable for pairing.
-
-Both are the **same** service — `config/session-control/app.py`, a stdlib-Python control
-plane driven by a per-kind config (`code.json` / `terminal.json`). It speaks the Docker
-Engine API over the socket (no shell, no pip deps).
-
-**From either web UI** (or the JSON API each serves — see below):
-
-- **Create** — pick a name (`[a-z0-9-]`, ≤31 chars) and a profile, hit *Create*. A container
-  spins up at `https://<name>.<kind>.lab` and the tab opens. Caddy routes it the moment it
-  starts (it reads the labels the control plane sets); step-ca issues its cert on first hit.
-- **Open / Resume** — *Open* a running session, or *Resume* a stopped one (it keeps its files).
-- **Stop** — stops the container but keeps the data (resumable). **Delete** — removes the
-  container **and wipes** its data.
-
-Everything is scriptable over the same API (handy from another box on the LAN); swap
-`code` → `terminal` for the other kind:
-
-```bash
-# list / create / stop / delete  (curl pins the name to HOST_IP + trusts the lab CA)
-C="https://code.lab"; R="--resolve code.lab:443:$HOST_IP --cacert lab-root-ca.crt"
-curl -sS $R "$C/api/profiles"
-curl -sS $R -X POST "$C/api/sessions" -H 'content-type: application/json' -d '{"name":"poc","profile":"zig"}'
-curl -sS $R "$C/api/sessions"
-curl -sS $R -X POST   "$C/api/sessions/poc/stop"
-curl -sS $R -X DELETE "$C/api/sessions/poc"
-```
-
-**Profiles** are pre-built images (`profiles/<kind>/<name>/Dockerfile`, built by
-`./build-profiles.sh`) that bake in a toolchain, listed per kind in
-`config/session-control/{code,terminal}.json`:
-
-| Kind | Profile | Bakes in |
-|------|---------|----------|
-| code     | `base`     | plain code-server |
-| code     | `zig`      | Zig + ZLS + `ziglang.vscode-zig` (extension from Open VSX) |
-| code     | `python`   | Python 3 + venv/pip + `ms-pyright.pyright`, `charliermarsh.ruff` |
-| terminal | `base`     | bash + tmux + vim/git/curl |
-| terminal | `netutils` | base + nmap / tcpdump / netcat / dns tools |
-
-Add one by dropping `profiles/<kind>/<name>/Dockerfile`, adding an entry to that kind's
-config, and running `./build-profiles.sh <kind>/<name>` (an online/staging step — it
-`apt`-installs, downloads toolchains, installs extensions, then the images run fully offline).
-For **code** profiles, note that Microsoft's first-party VS Code extensions are **not** on
-Open VSX (code-server's registry), so use Open-VSX ids or build the tool from source in the
-Dockerfile (the `zig` profile builds ZLS that way).
-
-**Persistence & backup** — one dir per session is bind-mounted — the **project dir**
-(`volumes/code/<name>/project`) for workspaces, **`/root`** (`volumes/term/<name>/root`) for
-terminals — so your work lands in the rsync backup like everything else under `volumes/`. The
-rest of the container layer is kept across stop/resume and wiped on delete.
-
-**DNS** — sessions live one label deeper than the stack, so `bootstrap.sh` adds
-`*.code.lab` and `*.terminal.lab` records alongside the `*.lab` wildcard.
-
-> **Security note.** Each control plane drives the **Docker socket** (root-equivalent) and is
-> **unauthenticated** by design for now (LAN-trust, like Dozzle/Homepage). It is written to be
-> safe regardless: no shell (it speaks the Docker Engine API with JSON bodies), a strict
-> session-name allowlist that makes the name safe in every context, path-traversal checks, a
-> server-side-only image (clients send a profile *name*), and destructive ops that only touch
-> containers carrying the control plane's own label. When you add auth to the stack, put these
-> endpoints behind it first.
-
-## Offline programming references
-
-Three reference sites, each its own dashboard tile, served by a tiny nginx over a git-ignored
-`volumes/<name>` tree. Content is **not** fetched at runtime — `./fetch-docs.sh` stages it
-during the online provisioning window (the docs analog of `docker compose pull`), then the
-populated dirs travel to the air-gapped host:
-
-| Tile | URL | Source | Stage with |
-|------|-----|--------|------------|
-| cppreference | `https://cppref.lab` | PeterFeicht html-book archive | `./fetch-docs.sh cppreference` |
-| x86 ref | `https://x86.lab` | mirror of `c9x.me/x86/` | `./fetch-docs.sh x86` |
-| tldr | `https://tldr.lab` | [tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA, built from source | `./fetch-docs.sh tldr` |
-
-For the two plain-HTML mirrors, `fetch-docs.sh` drops a small redirect `index.html` at the
-volume root so the bare URL lands on the right page. **tldr** is different: it's a Vue PWA
-whose build bakes the whole tldr-pages archive into the bundle, so staging it *builds* the
-static site in a throwaway node container (needs `docker`, not just curl/wget) rather than
-downloading one. Because it's a history-mode SPA it carries its own nginx config
-(`config/nginx/tldr.conf`, deep links fall back to `index.html`); the build also patches the
-in-browser page loader to read only the bundled archive so a cold load never reaches GitHub.
-
-## Using object storage (MinIO)
-
-- Console: `https://s3-console.lab`  (login = the shared `LAB_USER` / `LAB_PASSWORD`)
-- S3 endpoint: `https://s3.lab`
-
-```bash
-mc alias set lab https://s3.lab "$LAB_USER" "$LAB_PASSWORD"
-mc mb lab/artifacts
-aws --endpoint-url https://s3.lab s3 cp ./file s3://artifacts/   # any S3 SDK works
-```
-
-The image is pinned to the last release that ships a full admin console; swap to
-`minio/minio` in `compose/minio.yaml` if you only need the S3 API + the `mc` CLI.
-
-## Using the file share
-
-The share is **passwordless** — anyone on the LAN gets guest read/write. No SMB
-credentials.
-
-```bash
-# Linux
-sudo mount -t cifs //files.lab/lab /mnt/lab -o guest,vers=3.0
-# Windows (cmd) -- see the guest caveat below before this works
-net use Z: \\files.lab\lab
-```
-
-> **Windows guest caveat:** Windows 10/11 block unauthenticated guest SMB by default
-> ("you can't access this shared folder because your organization's security policies
-> block unauthenticated guest access"). To allow it, enable insecure guest logons:
-> `reg add HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters /v AllowInsecureGuestAuth /t REG_DWORD /d 1 /f`
-> (or the equivalent Group Policy: *Computer Config → Admin Templates → Network →
-> Lanman Workstation → Enable insecure guest logons*). macOS/Linux just connect as guest.
-
-Files also show up at `https://files.lab` (filebrowser) — **no login**, it drops you
-straight into the file view.
-
-## Using the file share over HTTP (curl)
-
-`dav.lab` is an nginx face on the **same `volumes/share` tree**, so you can read and write
-files with nothing but curl — no SMB, no client config, no auth. Files it writes are owned
-exactly like Samba's (`smbuser`, `0664`), so SMB, FileBrowser and curl all see each other's
-files.
-
-```bash
-# PUT -- upload to an exact path (missing parent dirs are auto-created)
-curl -T ./report.pdf https://dav.lab/reports/2026/report.pdf
-
-# PUT to a directory (trailing slash) -- curl appends the local filename for you
-curl -T ./report.pdf https://dav.lab/reports/2026/
-
-# GET -- download a file, or browse the HTML directory listing
-curl -O https://dav.lab/reports/2026/report.pdf
-curl    https://dav.lab/reports/2026/
-
-# DELETE -- remove a file (or an empty directory)
-curl -X DELETE https://dav.lab/reports/2026/report.pdf
-
-# MKCOL -- make a directory
-curl -X MKCOL https://dav.lab/reports/2027/
-```
-
-> **It's `dav.lab`, not `files.lab`** — `files.lab` is FileBrowser's web UI. To move this
-> HTTP API onto a different name, edit the `caddy:` label on the `webdav` service in
-> `compose/webdav.yaml`.
-
-nginx's built-in WebDAV module handles `PUT`/`DELETE`/`MKCOL`/`COPY`/`MOVE`; `GET`/`HEAD`
-serve files and HTML directory listings (`autoindex`). **`POST` is not supported.**
-
-## Backups
-
-Every 3 hours, `rsync` copies the stack's `volumes/` tree into a new dated directory, with
-unchanged files hardlinked to the previous backup (`rsync --link-dest`) so many snapshots
-cost about one copy plus deltas. A prune keeps the snapshot nearest each interval (3h … 3
-months) and deletes anything older than 3 months. Each snapshot is a plain, browsable copy.
-
-```bash
-# recovery on a new host: rsync a snapshot back into volumes/, then start the stack
-./backup/lab-restore.sh list                  # pick a snapshot
-sudo ./backup/lab-restore.sh restore latest   # -> the repo's volumes/ (stop the stack first)
-docker compose up -d && ./bootstrap.sh
-```
-
-Backups run hot (no container downtime); set `PAUSE_CONTAINERS=1` for a guaranteed
-consistent copy of the embedded databases (a brief freeze, not a restart). Setup, the
-retention curve, and disaster recovery are in [`backup/README.md`](backup/README.md) and
-[`Playbook.md`](Playbook.md#backups).
-
-## How the TLD stays DRY
-
-`LAB_DOMAIN` in `.env` is interpolated into every `caddy:` *and* `homepage.*` container
-label **and** read by `bootstrap.sh`. To rename the TLD, change that one variable, then
-`docker compose up -d --force-recreate && ./bootstrap.sh`. Nothing else hardcodes the TLD.
-
-The dashboard is built from **Docker-label discovery** — each container carries
-`homepage.*` labels that Homepage reads off the socket (`config/homepage/docker.yaml`), so
-there's no service list to hand-maintain. Homepage writes its full config on first boot
-with *live* demo entries, so `services.yaml` and `bookmarks.yaml` are committed as empty
-`[]` to suppress them, and `docker.yaml` is mandatory (its generated default is commented
-out → discovery silently no-ops). Everything else under `config/homepage/` is regenerated
-and gitignored via a whitelist.
-
-**Icons are served locally**, not from a CDN. Homepage's default `icon: technitium.png`
-form fetches from a public icon CDN — which fails on an air-gapped LAN, leaving every tile
-broken. So each tile's icon is checked into `config/homepage/icons/` (mounted read-only at
-`/app/public/icons`) and referenced as `icon: /icons/<name>`. Most are the upstream app
-logos (PNG); the three utility services with no logo (DevDocs, NTP, DHCP) use a tinted
-[Material Design](https://pictogrammers.com/library/mdi/) glyph (SVG). To add an icon for a
-new service, drop the file in `config/homepage/icons/` and set `homepage.icon: /icons/<file>`
-on the container; restart Homepage to pick up new files.
-
-## Common tasks
-
-```bash
-docker compose ps                              # status
-docker compose logs -f caddy                   # follow one service (drop the name for all)
-docker compose up -d                           # start / apply config changes
-docker compose down                            # stop everything (volumes/ data is kept)
-docker compose pull && docker compose up -d    # update images
-docker compose restart caddy                   # bounce one service
-docker compose restart webdav                  # apply a config/nginx/nginx.conf change
-```
-
-## Notes & caveats
-
-- **Every image is pinned by digest** (`@sha256:…`, the exact builds smoke-tested here);
-  the readable tag/version is in the trailing comment on each `image:` line. To bump one:
-  `docker pull <repo>:<tag>` then swap in the new digest from
-  `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
-- **`.env` holds secrets** and is git-ignored; so are `lab-root-ca.crt` and everything
-  under `volumes/`.
-- **The CA you trust lives in `volumes/stepca/`** (step-ca's root), not in Caddy. Don't
-  delete that directory or every client has to re-trust a new root — back it up.
-- **Certs only validate for clients that trust the exported root CA** — inherent to a
-  private TLD. A real domain + DNS-01 would get you publicly-trusted certs instead.
+Mechanics, the retention curve, and disaster recovery are in [`backup/README.md`](backup/README.md).
+
+## Notes
+
+- **Every image is pinned by digest** (`@sha256:…`); the readable tag is in the trailing
+  comment on each `image:` line. Bump one with `docker pull <repo>:<tag>` then swap in the
+  digest from `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
+- **`.env`, `lab-root-ca.crt`, and `volumes/` are git-ignored.** Keep `.env` and the CA in a
+  password manager — they're not reproducible from git.
+- **The trusted root lives in `volumes/stepca/`** (step-ca's root), and is included in
+  backups. Lose it and every client must re-trust a new root.
+- **Certs validate only for clients that trust the exported root CA** — inherent to a private
+  TLD. A real domain + DNS-01 would yield publicly trusted certs instead.
+- **`LAB_DOMAIN` is the only place the TLD is set.** It is interpolated into every `caddy:` and
+  `homepage.*` label and read by `bootstrap.sh`; see [Playbook → Rename the TLD](Playbook.md#rename-the-tld).

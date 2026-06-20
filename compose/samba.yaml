@@ -4,11 +4,8 @@ services:
     image: dperson/samba@sha256:66088b78a19810dd1457a8f39340e95e663c728083efa5fe7dc0d40b2478e869  # :latest pinned 2026-06
     container_name: samba
     restart: unless-stopped
-    # Passwordless guest share (flat-team setup; no SMB auth). The dperson image
-    # already sets `map to guest = bad user` globally, so an unauthenticated client
-    # maps to the guest account; `force user = smbuser` owns whatever guests write.
-    # Note: modern Windows blocks guest SMB by default -- clients must enable
-    # AllowInsecureGuestAuth; Linux mounts need `-o guest`. See README.
+    # Passwordless guest share: unauthenticated clients map to guest and `force user = smbuser`
+    # owns what they write. Windows clients need AllowInsecureGuestAuth; Linux needs `-o guest`.
     command: >
       -s "lab;/share;yes;no;yes"
       -g "server min protocol = SMB2"

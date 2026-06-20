@@ -1,333 +1,333 @@
-# `.lab` stack — operations playbook
+# SmallLab — operations playbook
 
-Day-two procedures for the `.lab` homelab stack. For what the stack *is* and how
-clients consume it, see [`README.md`](README.md); this file is the step-by-step
-"how do I…" reference.
+Day-two procedures for SmallLab. Each play states what it does and when you'd reach for it,
+then the exact steps. For what the stack is, the service list, and first install, see
+[`README.md`](README.md).
 
-Topology: two servers.
+Conventions: commands run from the repo root (`/opt/lab`) on the **docker host** unless a play
+says otherwise; the backup plays run on the **backup server**. `192.168.1.171` stands in for
+`HOST_IP`.
 
-| Role | Hostname (example) | Runs |
-|------|--------------------|------|
-| **Docker host** | `dockerhost.lab` (`192.168.1.171`) | the whole compose stack |
-| **Backup server** | `backup.lab` | pulls `rsync` snapshots from the docker host |
+## Plays
 
-The git checkout is the source of truth. Everything except `volumes/`, `.env`, and
-`lab-root-ca.crt` is reproducible from it. The canonical checkout path used throughout
-is **`/opt/lab`**.
-
----
-
-## Contents
-
-1. [Stand up the two servers from scratch](#1-stand-up-the-two-servers-from-scratch)
-2. [Add or remove a service](#2-add-or-remove-a-service)
-3. [Backups — create and restore](#3-backups--create-and-restore)
-4. [Issue a cert from the CA](#4-issue-a-cert-from-the-ca)
-5. [Add DNS entries (Technitium web UI)](#5-add-dns-entries-technitium-web-ui)
-6. [Smoke-test and health](#6-smoke-test-and-health)
-7. [Enable DHCP (make the host the LAN's DHCP authority)](#7-enable-dhcp-make-the-host-the-lans-dhcp-authority)
-8. [CI runner & offline docs](#8-ci-runner--offline-docs)
-
----
-
-## 1. Stand up the two servers from scratch
-
-### 1a. Docker host
-
-Bring the whole stack up on a fresh Debian/Ubuntu box. Run as a user with `sudo`.
-
-```bash
-# --- packages: Docker Engine + compose plugin, plus rsync and an ssh server ---
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git rsync openssh-server
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker "$USER" && newgrp docker     # run docker without sudo
-
-# (Ubuntu: swap the two `debian` strings above for `ubuntu`.)
-```
-
-```bash
-# --- get the repo ---
-sudo mkdir -p /opt/lab && sudo chown "$USER" /opt/lab
-git clone <your-repo-url> /opt/lab        # or copy the tree in; rsync/scp/usb
-cd /opt/lab
-
-# --- secrets + host IP (.env is git-ignored; create from the template) ---
-cp .env.example .env
-$EDITOR .env                              # set HOST_IP to THIS box's LAN IP, set the
-                                          # change-me passwords, keep LAB_DOMAIN=lab, and set
-                                          # DOCKER_GID (getent group docker | cut -d: -f3;
-                                          # the Forgejo runner needs it)
-
-# --- runtime dirs (bind mounts; git-ignored). A few need specific ownership. ---
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term,opengrok/src,opengrok/data,opengrok/etc}
-sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
-sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
-sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
-sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
-sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
-# (the doc dirs are served read-only by nginx. OpenGrok chowns volumes/opengrok/src to its own
-#  uid 1111 on boot, so it needs no manual chown here -- but that mount must stay WRITABLE: a
-#  :ro src makes the container exit at startup, surfacing as a Caddy 502. See §8.)
-
-# --- pull every image + stage offline docs up front (ONLINE window; air-gap prep) ---
-docker compose pull
-./fetch-docs.sh                           # stage cppreference + x86 + tldr content (tldr build needs docker)
-./build-profiles.sh                       # build the session profile images (code: Zig/Python; terminal: base/netutils)
-
-# --- bring it up and wire DNS + CA + Forgejo (+ register the Actions runner) ---
-docker compose up -d
-./bootstrap.sh
-```
-
-`bootstrap.sh` creates the `lab` DNS zone, points `*.lab` + `lab` at `HOST_IP`, exports
-the root CA to `./lab-root-ca.crt`, restarts Caddy to issue certs, and creates the Forgejo
-admin user + public packages org. It is idempotent — re-run it any time.
-
-> **Firewall:** if the host runs one, allow inbound `80`, `443/tcp+udp`, `53/tcp+udp`,
-> `123/udp` (NTP), `445/tcp`, `139/tcp`, `9000/tcp`, and `22/tcp` (for the backup pull).
-> Only if you enable the DHCP profile (§7), also allow `67/udp` on the LAN NIC.
-
-Verify before moving on:
-
-```bash
-docker compose ps           # every service Up (Forgejo takes a few seconds to migrate)
-./test.sh                   # end-to-end smoke test (see §6)
-```
-
-Then configure clients (resolve `*.lab`, trust `lab-root-ca.crt`) — see
-[README → Client setup](README.md#client-setup-once-per-machine-that-uses-the-lab).
-
-> **Packages:** Forgejo's registry works out of the box with no license — anonymous
-> pull/download from the public `lab` org, authenticated push. The admin password lives in
-> `.env` (the shared `LAB_PASSWORD`); change it in the UI later and mirror it back.
-
-### 1b. Backup server
-
-Pulls snapshots from the docker host (so the host can't reach — or wipe — the backups).
-Run as `root` (reading the host's `volumes/` needs root on both ends).
-
-```bash
-sudo apt-get update && sudo apt-get install -y rsync openssh-client git
-sudo git clone <your-repo-url> /opt/lab          # for the backup/ scripts (or copy them)
-
-# 1. give this box an ssh key the docker host trusts (root, to read all of volumes/)
-ssh-keygen -t ed25519 -f /root/.ssh/lab-backup -N ''
-ssh-copy-id -i /root/.ssh/lab-backup root@dockerhost.lab    # or paste the .pub into the host
-
-# 2. config
-sudo install -d /etc/lab-backup
-sudo cp /opt/lab/backup/config.env.example /etc/lab-backup/config.env
-sudoedit /etc/lab-backup/config.env
-#   SRC=root@dockerhost.lab:/opt/lab/volumes
-#   DEST=/backups/lab               (this box's disk or a mounted NAS)
-#   SSH_RSH="ssh -i /root/.ssh/lab-backup -o BatchMode=yes -o StrictHostKeyChecking=yes"
-#   RESTORE_TARGET=/opt/lab/volumes
-
-# 3. install the scripts + the every-3-hours timer
-sudo install -m755 /opt/lab/backup/lab-backup.sh  /opt/lab-backup/lab-backup.sh
-sudo install -m755 /opt/lab/backup/lab-restore.sh /opt/lab-backup/lab-restore.sh
-sudo cp /opt/lab/backup/systemd/lab-backup.* /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now lab-backup.timer
-
-# 4. prove it works now
-sudo /opt/lab-backup/lab-backup.sh
-/opt/lab-backup/lab-restore.sh list
-```
-
-Full detail (retention curve, hot vs. paused copy, off-site mirroring) is in
-[`backup/README.md`](backup/README.md).
+- [Onboard a client](#onboard-a-client)
+- [Add a service](#add-a-service)
+- [Remove a service](#remove-a-service)
+- [Add or rebuild a session profile](#add-or-rebuild-a-session-profile)
+- [Use a code workspace or terminal](#use-a-code-workspace-or-terminal)
+- [Use the package registry (Forgejo)](#use-the-package-registry-forgejo)
+- [Forgejo Actions (runner & workflows)](#forgejo-actions-runner--workflows)
+- [Use object storage (MinIO)](#use-object-storage-minio)
+- [Use the file share](#use-the-file-share)
+- [Issue a cert from the CA](#issue-a-cert-from-the-ca)
+- [Add DNS records](#add-dns-records)
+- [Run a backup](#run-a-backup)
+- [Restore a snapshot](#restore-a-snapshot)
+- [Enable or disable DHCP](#enable-or-disable-dhcp)
+- [Index code in OpenGrok](#index-code-in-opengrok)
+- [Re-stage offline docs](#re-stage-offline-docs)
+- [Smoke-test and health](#smoke-test-and-health)
+- [Update images and everyday compose](#update-images-and-everyday-compose)
+- [Rename the TLD](#rename-the-tld)
 
 ---
 
-## 2. Add or remove a service
+## Onboard a client
 
-The wildcard `*.lab` DNS record already points every name at the host, and Caddy
-discovers sites from container labels — so **adding a service needs no DNS or Caddy edit**,
-just a compose file with the right labels.
+**Description.** Make one machine trust the lab root CA and resolve `*.lab`.
+**When to use.** Any new client that will browse or consume lab services (unless DHCP already
+configures it — see [Enable or disable DHCP](#enable-or-disable-dhcp)).
 
-### Add a service
+Trust the root CA (copy `lab-root-ca.crt` from the host first):
 
-1. Create `compose/<name>.yaml`. Minimal template for a web app behind Caddy that also
-   shows up on the dashboard:
+```bash
+# Linux
+sudo cp lab-root-ca.crt /usr/local/share/ca-certificates/lab-ca.crt && sudo update-ca-certificates
+# macOS
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain lab-root-ca.crt
+# Windows (elevated)
+certutil -addstore -f Root lab-root-ca.crt
+```
+
+Firefox keeps its own store — import it there too. Docker needs the CA to push to the registry
+(see [Use the package registry](#use-the-package-registry-forgejo)).
+
+Resolve `*.lab` — point the whole resolver at the host, or send only `*.lab` to it (split DNS):
+
+```bash
+# Linux + systemd-resolved (per-interface; ~lab routes only *.lab to the lab)
+IFACE=$(ip route get 192.168.1.171 | grep -oP 'dev \K\S+')
+resolvectl dns "$IFACE" 192.168.1.171 && resolvectl domain "$IFACE" '~lab'   # runtime
+# persist via NetworkManager:
+nmcli con mod "<con>" +ipv4.dns 192.168.1.171 +ipv4.dns-search '~lab' && nmcli con up "<con>"
+
+# Linux without systemd-resolved (local dnsmasq stub)
+sudo apt install -y dnsmasq
+echo 'server=/lab/192.168.1.171' | sudo tee /etc/dnsmasq.d/lab.conf && sudo systemctl restart dnsmasq
+
+# macOS (per-domain resolver; verify with ping/curl, not dig — dig bypasses /etc/resolver)
+echo "nameserver 192.168.1.171" | sudo tee /etc/resolver/lab
+
+# Windows + NRPT (elevated PowerShell; leading dot matches all *.lab)
+Add-DnsClientNrptRule -Namespace ".lab" -NameServers "192.168.1.171"
+```
+
+A second `nameserver` line in `resolv.conf` does **not** do split DNS (multiple nameservers are
+failover across all lookups). Optionally point the client's time at the lab too:
+
+```bash
+echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sudo systemctl restart chrony
+```
+
+---
+
+## Add a service
+
+**Description.** Add a new container that Caddy fronts and the dashboard shows.
+**When to use.** Bringing any new app into the stack.
+
+1. Create `compose/<name>.yaml`:
 
    ```yaml
-   # <name> -- <one-line description>.
+   # <name> -- <one-line description> (<name>.lab).
    services:
      <name>:
        image: <repo>@sha256:<digest>   # <readable tag>
        container_name: <name>
        restart: unless-stopped
        volumes:
-         - ../volumes/<name>:/data     # only if it has state (mkdir it; see step 3)
+         - ../volumes/<name>:/data     # only if it has state
        networks:
          - caddy
        labels:
          caddy: <name>.${LAB_DOMAIN}
          caddy.reverse_proxy: "{{upstreams <container-port>}}"
-         homepage.group: Tools        # Infrastructure | Storage & Packages | Tools
+         homepage.group: Tools        # Infrastructure | Storage & Packages | Tools | Reference
          homepage.name: <Display Name>
-         homepage.icon: <name>.png
+         homepage.icon: /icons/<name>.png
          homepage.href: https://<name>.${LAB_DOMAIN}
          homepage.description: <short description>
          homepage.weight: "50"
    ```
 
-   - **Not a web app** (e.g. it needs raw host ports like Samba): drop the `caddy` labels,
-     put it on its own non-`caddy` network, and add `ports: ["${HOST_IP}:<p>:<p>"]`.
-     Don't publish host ports from an `internal` network — Docker can't forward through one.
-   - **Two sites on one container:** use ordinal label groups `caddy_0` / `caddy_1`
-     (see `compose/minio.yaml`).
+   - **Not a web app** (raw host ports, like Samba): drop the `caddy` labels, use the `backend`
+     network, and add `ports: ["${HOST_IP}:<p>:<p>"]`.
+   - **Two sites on one container:** use ordinal label groups `caddy_0` / `caddy_1` (see
+     `compose/minio.yaml`).
 
-2. Add the file to the `include:` list in [`compose.yaml`](compose.yaml).
-
-3. If it has persistent state, create its bind-mount dir (and chown if the image runs as
-   a non-root uid): `mkdir -p volumes/<name>`.
-
-4. Pin the image by digest (the stack convention):
-   `docker pull <repo>:<tag>` then read the digest with
+2. Add the file to `include:` in [`compose.yaml`](compose.yaml).
+3. If it has state, create its bind-mount dir: `mkdir -p volumes/<name>` (chown to the image's
+   uid if it runs non-root).
+4. Pin the digest: `docker pull <repo>:<tag>` then
    `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
-
 5. Apply and verify:
 
    ```bash
    docker compose up -d                 # creates the new container; leaves others alone
-   docker compose logs -f <name>
    curl --resolve <name>.lab:443:$HOST_IP --cacert lab-root-ca.crt https://<name>.lab/
    ```
 
-   The cert is issued on first request and is valid within ~30s (DNS already resolves via
-   the wildcard). The dashboard tile appears automatically from the `homepage.*` labels.
+No DNS or Caddy edit is needed — the `*.lab` wildcard already resolves and Caddy reads the
+labels. The cert is issued on first request (~30s); the dashboard tile appears automatically.
 
-### Remove a service
+---
+
+## Remove a service
+
+**Description.** Drop a service and its tile.
+**When to use.** Retiring an app.
 
 ```bash
-# 1. delete its line from compose.yaml's `include:` and remove compose/<name>.yaml
-# 2. drop the container (and any now-orphaned ones):
-docker compose up -d --remove-orphans
-#    or target just it:   docker compose rm -sf <name>
+# 1. delete its line from compose.yaml's include: and remove compose/<name>.yaml
+# 2. drop the container (and any orphaned ones)
+docker compose up -d --remove-orphans      # or target it: docker compose rm -sf <name>
 # 3. optional: reclaim its data and config
-sudo rm -rf volumes/<name>
-rm -rf config/<name>
+sudo rm -rf volumes/<name> config/<name>
 ```
 
-Caddy drops the site and the dashboard tile disappears on its own (label-driven). No DNS
-change needed — the wildcard simply stops having a backend for that name.
+Caddy drops the site and the tile disappears on its own.
 
-### Add or rebuild a session profile (code or terminal)
+---
 
-Both `code.lab` and `terminal.lab` run the same `config/session-control/app.py` with a
-per-kind config (`code.json` / `terminal.json`). Profiles are baked images, so changes are an
-online/staging step. `<kind>` is `code` (FROM code-server) or `term` (FROM ttyd):
+## Add or rebuild a session profile
+
+**Description.** Add or refresh a baked image for a code-workspace or terminal profile.
+**When to use.** Adding a language/toolchain to the session menu, or updating an existing one.
+`<kind>` is `code` (FROM code-server) or `term` (FROM ttyd).
 
 ```bash
 # 1. add or edit the Dockerfile (FROM the kind's pinned base; install tools/extensions)
 $EDITOR profiles/<kind>/<name>/Dockerfile
-# 2. register it (the control plane reads this; clients pick a profile by NAME only)
-$EDITOR config/session-control/<code|terminal>.json   # add "<name>": {"image":"lab/<kind>-<name>:latest", ...}
-# 3. (re)build -- needs internet (apt / toolchain download / Open VSX extensions)
-./build-profiles.sh <kind>/<name>             # or `<kind>` for all of a kind; omit for everything
+# 2. register it (clients pick a profile by NAME only)
+$EDITOR config/session-control/<code|terminal>.json   # "<name>": {"image":"lab/<kind>-<name>:latest", ...}
+# 3. (re)build -- needs internet (apt / toolchain / Open VSX extensions)
+./build-profiles.sh <kind>/<name>          # or `<kind>` for all of a kind; omit for everything
 # 4. pick up the config change without rebuilding the control plane
-docker compose restart code-control           # or term-control
+docker compose restart code-control        # or term-control
 ```
 
-Running sessions keep the image they were created with; *new* sessions of that profile use
-the rebuilt image. Notes: code extensions install from **Open VSX** (Microsoft's first-party
-extensions aren't there — use Open-VSX ids or build from source, as the `zig` profile does for
-ZLS); the bind-mounted dir (`volumes/code/<name>/project` or `volumes/term/<name>/root`) is
-rsync-backed up; deleting a session from the UI removes its container **and** wipes that dir.
-
-> **Session not reachable?** `*.code.lab` / `*.terminal.lab` are one label deeper than `*.lab`,
-> so they need their own wildcards — `bootstrap.sh` adds both. If sessions 404 in DNS, re-run it.
+Running sessions keep their original image; new sessions use the rebuilt one. Code extensions
+install from **Open VSX** (Microsoft's first-party extensions aren't there — use Open-VSX ids or
+build from source, as the `zig` profile does for ZLS).
 
 ---
 
-## 3. Backups — create and restore
+## Use a code workspace or terminal
 
-Backups run on the **backup server** (set up in §1b). Each run is a dated `rsync`
-hard-link snapshot of the docker host's `volumes/`; retention thins them to a 3h…3-month
-curve. Mechanics and the retention list: [`backup/README.md`](backup/README.md).
+**Description.** Create, reach, and tear down on-demand code-server or ttyd sessions.
+**When to use.** You want a throwaway dev environment or a shared browser terminal.
 
-### Create a backup now (off-schedule)
+From [`https://code.lab`](https://code.lab) or [`https://terminal.lab`](https://terminal.lab):
+**Create** (name `[a-z0-9-]`, ≤31 chars + profile) → a container spins up at
+`https://<name>.<kind>.lab`; **Open/Resume** a running or stopped session (files persist);
+**Stop** keeps data; **Delete** removes the container and wipes its data. Terminals run
+`tmux new -A -s main`, so a reconnect or second tab reattaches the same session.
 
-```bash
-# on the backup server
-sudo /opt/lab-backup/lab-backup.sh                       # uses /etc/lab-backup/config.env
-sudo PAUSE_CONTAINERS=1 /opt/lab-backup/lab-backup.sh    # guaranteed-consistent DB copy
-                                                         # (brief docker pause, not a restart)
-```
-
-### List snapshots
+Scriptable over the same API (swap `code` → `terminal`):
 
 ```bash
-/opt/lab-backup/lab-restore.sh list
+C="https://code.lab"; R="--resolve code.lab:443:$HOST_IP --cacert lab-root-ca.crt"
+curl -sS $R "$C/api/profiles"
+curl -sS $R -X POST "$C/api/sessions" -H 'content-type: application/json' -d '{"name":"poc","profile":"zig"}'
+curl -sS $R "$C/api/sessions"
+curl -sS $R -X POST   "$C/api/sessions/poc/stop"
+curl -sS $R -X DELETE "$C/api/sessions/poc"
 ```
 
-### Restore
-
-```bash
-# A) back onto the SAME docker host (stop the stack first so nothing is mid-write):
-#    (run from /opt/lab on the host, or use --target)
-ssh root@dockerhost.lab 'cd /opt/lab && docker compose down'
-sudo /opt/lab-backup/lab-restore.sh restore latest --to root@dockerhost.lab:/opt/lab/volumes
-ssh root@dockerhost.lab 'cd /opt/lab && docker compose up -d && ./bootstrap.sh'
-
-# B) onto a BRAND-NEW host, before its first `up` (do §1a through the volumes step, then):
-sudo /opt/lab-backup/lab-restore.sh restore latest --to root@newhost:/opt/lab/volumes
-ssh root@newhost 'cd /opt/lab && docker compose up -d && ./bootstrap.sh'
-
-# C) locally, if you run the restore on the machine that holds the volumes:
-sudo /opt/lab-backup/lab-restore.sh restore 20260619T030000 --target /opt/lab/volumes
-```
-
-`--force` skips the overwrite prompt. The whole `volumes/` tree comes back with the same
-paths, perms and UIDs (`rsync -aH --numeric-ids`), so the stack mounts it straight back in.
-
-> **Not in the backups:** `.env` and `lab-root-ca.crt` are neither under `volumes/` nor in
-> git — keep them in a password manager. The CA in `volumes/stepca/` *is* backed up; losing
-> it means every client must re-trust a new root.
-
-After any restore, run `./test.sh` on the host (§6).
+One dir per session is bind-mounted and lands in backups: `volumes/code/<name>/project` for
+workspaces, `volumes/term/<name>/root` for terminals.
 
 ---
 
-## 4. Issue a cert from the CA
+## Use the package registry (Forgejo)
 
-Caddy-proxied `*.lab` sites get their certs automatically. This is for **other** hosts or
-devices (a standalone web server, a printer, a syslog box) that need a `.lab` cert trusted
-by everything that already trusts `lab-root-ca.crt`.
+**Description.** Push and pull container images and language packages through `packages.lab`.
+**When to use.** Publishing or installing artifacts in-lab. `bootstrap.sh` creates the admin
+user and a **public** org (named after `LAB_DOMAIN`), so anonymous pull/download works; uploads
+authenticate. Packages are created on first push.
 
-### Option A — ACME (preferred; auto-renews)
-
-step-ca is a normal ACME CA at `https://ca.lab:9000/acme/acme/directory`. Point any ACME
-client at it; the only prerequisite is that the client trusts the root CA and can resolve
-`*.lab`.
+Docker (trust the CA first; push needs auth, public pull is anonymous):
 
 ```bash
-# example with acme.sh, issuing for myapp.lab
-export CA_BUNDLE=/usr/local/share/ca-certificates/lab-ca.crt   # the trusted root
+sudo mkdir -p /etc/docker/certs.d/packages.lab
+sudo cp lab-root-ca.crt /etc/docker/certs.d/packages.lab/ca.crt
+docker login packages.lab                              # admin creds or a token
+docker tag alpine packages.lab/lab/alpine:latest       # packages.lab/<org>/<image>
+docker push packages.lab/lab/alpine:latest
+docker pull packages.lab/lab/alpine:latest             # public org -> no login
+```
+
+PyPI (note the `/api/packages/<org>/pypi` base):
+
+```bash
+twine upload --repository-url https://packages.lab/api/packages/lab/pypi -u labadmin dist/*
+pip install --index-url https://packages.lab/api/packages/lab/pypi/simple <pkg>   # anonymous
+```
+
+Other formats (npm, Maven, Cargo, …) hang off `https://packages.lab/api/packages/<org>/` — see
+the [Forgejo packages docs](https://forgejo.org/docs/latest/user/packages/). Change the admin
+password in the UI afterward and mirror it in `.env`.
+
+---
+
+## Forgejo Actions (runner & workflows)
+
+**Description.** Run CI workflows on the registered Actions runner; inspect or re-register it.
+**When to use.** Setting up CI, debugging a runner that isn't picking up jobs, or rotating its
+identity.
+
+A minimal workflow (`.forgejo/workflows/ci.yml` in a repo):
+
+```yaml
+on: [push]
+jobs:
+  build:
+    runs-on: docker          # the `docker` label -> runs in node:22-bookworm
+    steps:
+      - run: echo "built on $(uname -a)"
+```
+
+Air-gap rules: `runs-on:` images must be pre-pulled on the host (the runner is `force_pull:
+false`); `uses:` actions resolve from this forge, so mirror the action repos into an org or use
+plain `run:` git steps. Labels/capacity live in `config/forgejo-runner/config.yaml`; edit then
+`docker compose restart forgejo-runner`.
+
+Inspect or re-register:
+
+```bash
+docker compose logs --tail=20 forgejo-runner   # "waiting for registration" = not bootstrapped
+./bootstrap.sh                                 # idempotent: registers if needed
+# runners in the UI: https://packages.lab/-/admin/actions/runners
+
+# force a clean re-register (the secret/.runner live in the data volume, owned by uid 1000):
+docker compose exec -T forgejo-runner sh -c 'rm -f /data/secret /data/.runner'
+docker compose restart forgejo-runner && ./bootstrap.sh
+```
+
+For stronger isolation, point the runner at a `docker:dind` sidecar instead of the host socket
+(`DOCKER_HOST=tcp://docker-in-docker:2375`, drop the socket mount).
+
+---
+
+## Use object storage (MinIO)
+
+**Description.** S3-compatible buckets via the console or any S3 client.
+**When to use.** Storing artifacts/objects in-lab.
+
+```bash
+mc alias set lab https://s3.lab "$LAB_USER" "$LAB_PASSWORD"
+mc mb lab/artifacts
+aws --endpoint-url https://s3.lab s3 cp ./file s3://artifacts/   # any S3 SDK works
+```
+
+Console: `https://s3-console.lab` (login = `LAB_USER` / `LAB_PASSWORD`). The image is pinned to
+the last release with a full console; swap to `minio/minio` in `compose/minio.yaml` for API-only.
+
+---
+
+## Use the file share
+
+**Description.** Read/write one shared tree over SMB, the web, or curl — all the same files.
+**When to use.** Moving files around the LAN with no auth.
+
+```bash
+# SMB (passwordless guest)
+sudo mount -t cifs //files.lab/lab /mnt/lab -o guest,vers=3.0     # Linux
+net use Z: \\files.lab\lab                                       # Windows (see caveat)
+
+# curl / WebDAV (dav.lab)
+curl -T ./report.pdf https://dav.lab/reports/2026/report.pdf      # PUT (parents auto-created)
+curl -O https://dav.lab/reports/2026/report.pdf                   # GET
+curl    https://dav.lab/reports/2026/                             # directory listing
+curl -X DELETE https://dav.lab/reports/2026/report.pdf            # DELETE
+curl -X MKCOL  https://dav.lab/reports/2027/                      # make a directory
+```
+
+`files.lab` is the FileBrowser web UI (no login). WebDAV covers PUT/DELETE/MKCOL/COPY/MOVE;
+`POST` is unsupported. **Windows guest caveat:** Windows 10/11 block guest SMB by default — allow
+it with `reg add HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters /v
+AllowInsecureGuestAuth /t REG_DWORD /d 1 /f`.
+
+---
+
+## Issue a cert from the CA
+
+**Description.** Get a `.lab` cert for a host/device that isn't behind Caddy.
+**When to use.** A standalone web server, printer, or appliance needs a cert trusted by
+everything that already trusts `lab-root-ca.crt`. (Caddy-proxied `*.lab` sites are automatic.)
+
+**ACME (preferred; auto-renews).** step-ca is a normal ACME CA; point any client at
+`https://ca.lab:9000/acme/acme/directory` (the client must trust the root and resolve `*.lab`):
+
+```bash
+export CA_BUNDLE=/usr/local/share/ca-certificates/lab-ca.crt
 acme.sh --server https://ca.lab:9000/acme/acme/directory \
         --issue -d myapp.lab --standalone --ca-bundle "$CA_BUNDLE"
 ```
 
-certbot (`--server https://ca.lab:9000/acme/acme/directory`) and step (`step ca certificate`)
-work the same way. Caddy on another host can use the global `acme_ca` / `acme_ca_root`
-options exactly like this stack's Caddy does.
-
-### Option B — one-off, issued by hand inside the CA
-
-No ACME round-trip; signs a leaf directly with the intermediate. Good for a device that
-can't run an ACME client. (Verified procedure — `step` ships in the container.)
+**One-off, signed by hand** (device that can't run ACME):
 
 ```bash
-# issue myapp.lab (+ an IP SAN) valid 90 days, key unencrypted for server use
 docker compose exec step-ca sh -c '
   cd /tmp
   step certificate create "myapp.lab" myapp.crt myapp.key \
@@ -337,212 +337,169 @@ docker compose exec step-ca sh -c '
     --san myapp.lab --san 192.168.1.50 \
     --not-after 2160h --bundle --no-password --insecure
 '
-# copy them out to the host, then to the device
 docker compose cp step-ca:/tmp/myapp.crt ./myapp.crt
 docker compose cp step-ca:/tmp/myapp.key ./myapp.key
 docker compose exec step-ca rm -f /tmp/myapp.crt /tmp/myapp.key
 ```
 
-`myapp.crt` is bundled (leaf + intermediate); any client that trusts `lab-root-ca.crt`
-will accept it. Verify: `step certificate verify myapp.crt --roots lab-root-ca.crt`, or
-`openssl verify -CAfile lab-root-ca.crt myapp.crt`.
+Verify: `step certificate verify myapp.crt --roots lab-root-ca.crt`.
 
 ---
 
-## 5. Add DNS entries (Technitium web UI)
+## Add DNS records
 
-The `lab` zone is authoritative; `bootstrap.sh` seeds the `*.lab` wildcard and the `lab`
-apex (both → `HOST_IP`). Add records for other hosts, devices, aliases, or service records.
+**Description.** Add records to the authoritative `lab` zone.
+**When to use.** A real host, device, alias, or non-A record type — anything the `*.lab`
+wildcard shouldn't cover (the wildcard already answers any name with no explicit record, so a
+new Caddy-fronted service needs no entry).
 
-1. Browse **`https://dns.lab`** and log in (the shared `LAB_USER` / `LAB_PASSWORD` from
-   `.env`; Technitium's username is `admin`).
-2. **Zones → `lab` → Add Record.**
-3. Pick the type and fill it in:
-   - **A** — `nas` → `192.168.1.50` (a real host; more specific than the wildcard, so it
-     wins for that name).
-   - **CNAME** — `grafana` → `home.lab` (an alias onto an existing name).
-   - **MX / TXT / SRV** — as needed.
-4. Save. TTLs are short (300s), so changes take effect within minutes; flush the client
-   resolver cache if you're impatient.
-
-Notes:
-
-- The `*.lab` wildcard answers any name with no explicit record, so a brand-new
-  Caddy-fronted service needs **no** DNS entry. Add explicit records only for things the
-  wildcard shouldn't cover (other physical hosts, non-host record types).
-- To forward a different private domain or change upstreams, use **Settings → Forwarders**.
-- Scripting the same thing (what `bootstrap.sh` does) — the HTTP API:
-
-  ```bash
-  TOKEN=$(curl -s "http://127.0.0.1:5380/api/user/login?user=admin&pass=$PASS" | jq -r .token)
-  curl -s "http://127.0.0.1:5380/api/zones/records/add?token=$TOKEN&zone=lab&domain=nas.lab&type=A&ipAddress=192.168.1.50&ttl=300"
-  ```
-
-  The API is published on the host's loopback (`127.0.0.1:5380`); from elsewhere, go
-  through `https://dns.lab`.
-
----
-
-## 6. Smoke-test and health
+Web UI: `https://dns.lab` → log in (`LAB_USER` / `LAB_PASSWORD`; Technitium's username is
+`admin`) → **Zones → `lab` → Add Record**. A more specific record (e.g. `nas` → `192.168.1.50`)
+wins over the wildcard. TTLs are 300s. Scripted (what `bootstrap.sh` does, via the loopback API):
 
 ```bash
-cd /opt/lab
-docker compose ps                 # all Up; Forgejo takes a few seconds to migrate on first boot
-./test.sh                         # end-to-end: DNS, TLS chain, every HTTP endpoint, step-ca,
-                                  # WebDAV, SMB<->WebDAV interop, MinIO S3, Forgejo packages
-docker compose logs -f <service>  # follow one service
+TOKEN=$(curl -s "http://127.0.0.1:5380/api/user/login?user=admin&pass=$PASS" | jq -r .token)
+curl -s "http://127.0.0.1:5380/api/zones/records/add?token=$TOKEN&zone=lab&domain=nas.lab&type=A&ipAddress=192.168.1.50&ttl=300"
 ```
 
-`test.sh` reaches services with `curl --resolve` / container `--add-host` / SMB-by-IP, so
-it passes from the host itself even though the host's own resolver isn't pointed at
-Technitium. A green run also proves the step-ca → Caddy certificate chain is trusted, and
-it does a real **PyPI publish+install** and **Docker push+pull** against Forgejo (cleaning
-up the test packages afterward).
+---
 
-Common one-offs:
+## Run a backup
+
+**Description.** Take an rsync hard-link snapshot of the host's `volumes/` now, off-schedule.
+**When to use.** Before a risky change, or to verify the backup path. (The timer already runs it
+every 3 hours.) Run on the **backup server**.
 
 ```bash
-docker compose restart caddy                   # re-issue / reload after a TLS change
-docker compose restart webdav                  # apply a config/nginx/nginx.conf edit
-docker compose pull && docker compose up -d     # update images
-docker compose cp step-ca:/home/step/certs/root_ca.crt ./lab-root-ca.crt   # re-export the CA
+sudo /opt/lab-backup/lab-backup.sh                       # hot copy, uses /etc/lab-backup/config.env
+sudo PAUSE_CONTAINERS=1 /opt/lab-backup/lab-backup.sh    # guaranteed-consistent DB copy (brief freeze)
+/opt/lab-backup/lab-restore.sh list                      # what's available
 ```
-
-To rename the TLD, change `LAB_DOMAIN` in `.env`, then
-`docker compose up -d --force-recreate && ./bootstrap.sh` — nothing else hardcodes it.
 
 ---
 
-## 7. Enable DHCP (make the host the LAN's DHCP authority)
+## Restore a snapshot
 
-DHCP is **opt-in** and ships disabled (compose profile `dhcp`). Turn it on only when you
-want *this host* to address the LAN — it then hands every client the lab's DNS and NTP
-automatically, so joining the network is the entire client setup (the root CA still has to
-be trusted by hand; DHCP can't push it).
-
-> **Stop here if a router already runs DHCP.** Two DHCP servers on one segment hand out
-> conflicting leases. Either disable the router's DHCP first, **or** don't run this at all
-> and instead set the router's DNS (option 6) and NTP (option 42) to `HOST_IP` — that gets
-> you the same zero-config clients with no second server. Only proceed below if this host
-> is the *sole* DHCP server on the segment.
+**Description.** Put a snapshot back into a host's `volumes/`, then start the stack.
+**When to use.** Disaster recovery, or seeding a brand-new host. Run on the **backup server**.
 
 ```bash
-cd /opt/lab
+/opt/lab-backup/lab-restore.sh list                       # pick a snapshot (or 'latest')
 
-# 1. find the host's LAN NIC (the one on the lab subnet)
-ip -br link            # e.g. ens18 / eth0 / enp3s0
+# A) back onto the SAME host (stop the stack first):
+ssh root@dockerhost.lab 'cd /opt/lab && docker compose down'
+sudo /opt/lab-backup/lab-restore.sh restore latest --to root@dockerhost.lab:/opt/lab/volumes
+ssh root@dockerhost.lab 'cd /opt/lab && docker compose up -d && ./bootstrap.sh'
 
-# 2. fill in the DHCP_* block in .env to match the LAN:
-#      DHCP_INTERFACE=ens18              # the NIC from step 1
-#      DHCP_RANGE_START=192.168.1.100    # pool start (keep clear of static IPs + HOST_IP)
-#      DHCP_RANGE_END=192.168.1.200      # pool end
-#      DHCP_NETMASK=255.255.255.0
-#      DHCP_GATEWAY=192.168.1.1          # the LAN's real gateway/router
-#      DHCP_LEASE=12h
+# B) onto a BRAND-NEW host, before its first up (do the install up to the volumes step first):
+sudo /opt/lab-backup/lab-restore.sh restore latest --to root@newhost:/opt/lab/volumes
 
-# 3. start just the DHCP container (the rest of the stack keeps running untouched)
+# C) locally, on the machine holding the volumes:
+sudo /opt/lab-backup/lab-restore.sh restore 20260619T030000 --target /opt/lab/volumes
+```
+
+`--force` skips the overwrite prompt. The tree comes back with the same paths/perms/UIDs, so the
+stack mounts it straight back. `.env` and `lab-root-ca.crt` are not in the backup — restore those
+from your password manager. Run `./test.sh` afterward.
+
+---
+
+## Enable or disable DHCP
+
+**Description.** Make the host the LAN's DHCP authority (hands out lab DNS + NTP + domain).
+**When to use.** You want machines configured by just joining the LAN, and **this host is the
+sole DHCP server on the segment** — never run a second DHCP server. If a router already does
+DHCP, leave this off and set the router's DNS (option 6) and NTP (option 42) to `HOST_IP`
+instead.
+
+```bash
+# 1. set the DHCP_* block in .env (LAN NIC, address range, gateway, lease)
+ip -br link                              # find the LAN NIC
+# 2. start it alongside the running stack
 docker compose --profile dhcp up -d
-docker compose logs -f dhcp            # watch for "DHCP, IP range ... lease time ..."
+docker compose logs -f dhcp              # watch for "DHCP, IP range ..."
+# off again:
+docker compose --profile dhcp down dhcp
 ```
 
-Verify a client gets a lease with the right options (DNS + NTP = `HOST_IP`, domain `lab`):
-
-```bash
-# on a client, request a fresh lease and inspect it
-sudo dhclient -v <iface>                       # or: nmcli con up <con>
-nmcli dev show <iface> | grep -E 'DNS|DOMAIN'  # should show HOST_IP and the lab domain
-resolvectl status <iface> | grep -A1 'DNS Servers'
-```
-
-dnsmasq runs **DNS-disabled** (`--port=0`), so it only ever answers DHCP — Technitium stays
-the only DNS server. It binds DHCP to `DHCP_INTERFACE` alone (`--bind-interfaces`), so it
-won't leak onto other NICs. Leases are kept in the (ephemeral) container; a restart just
-means clients re-request — harmless.
-
-Turn it back off:
-
-```bash
-docker compose --profile dhcp down dhcp     # or: docker compose rm -sf dhcp
-```
-
-> A plain `docker compose up -d` (no `--profile dhcp`) never starts DHCP and never stops a
-> running one — the profile gate keeps it out of the default lifecycle. Always include
-> `--profile dhcp` in commands meant to manage it.
+dnsmasq runs DNS-disabled (`--port=0`), bound to the one NIC, so it never competes with
+Technitium. Clients still need to trust the root CA (DHCP can't push it) —
+[Onboard a client](#onboard-a-client).
 
 ---
 
-## 8. CI runner & offline docs
+## Index code in OpenGrok
 
-Day-two notes for the developer-tooling services layered on top of the core stack. Setup and
-the air-gap details live in the [README](README.md); these are the "how do I…" one-liners. None
-of these open new host ports — they all go through Caddy (`80`/`443`) or stay internal, so the
-§1a firewall list is unchanged.
-
-### Forgejo Actions runner
-
-`bootstrap.sh` registers it automatically (shared-secret flow). To inspect or redo it:
+**Description.** Stage source trees for cross-reference + full-text search at `search.lab`.
+**When to use.** You want to read or grep a codebase in-lab. Fully offline.
 
 ```bash
-docker compose logs --tail=20 forgejo-runner   # "waiting for registration" = not bootstrapped;
-                                               # once registered the daemon logs a successful poll
-./bootstrap.sh                                 # idempotent: registers if needed, else no-ops
-# the forge lists its runners in the UI:  https://packages.lab/-/admin/actions/runners
-
-# force a clean re-register (fresh identity). The secret/.runner live in the data volume and
-# are owned by uid 1000, so wipe them from inside the container, not with host rm:
-docker compose exec -T forgejo-runner sh -c 'rm -f /data/secret /data/.runner'
-docker compose restart forgejo-runner && ./bootstrap.sh
-```
-
-Job labels / capacity are in `config/forgejo-runner/config.yaml`; edit then
-`docker compose restart forgejo-runner`. Air-gap rules still apply: `runs-on:` images must be
-pre-pulled and `uses:` actions mirrored into the forge (README → "Forgejo Actions (CI)").
-
-**Stronger isolation (docker-in-docker).** The runner shares the host Docker socket by default.
-To sandbox CI instead, run a `docker:dind` sidecar and point the runner at it
-(`DOCKER_HOST=tcp://docker-in-docker:2375`, drop the socket mount) — the upstream layout is in
-the [Forgejo runner docs](https://forgejo.org/docs/latest/admin/actions/runner-installation/).
-
-### Offline docs (re-staging)
-
-Content lives in `volumes/{cppreference,x86,tldr}`, served read-only. Refresh it from a box
-with internet (the `tldr` target also needs `docker` — it builds the PWA in a node container),
-then carry the dirs over:
-
-```bash
-./fetch-docs.sh                 # all of them
-./fetch-docs.sh cppreference    # just one target
-# if staged on another machine, rsync the dir(s) into the host's volumes/, then:
-docker compose restart cppreference x86 tldr
-```
-
-### Code search (OpenGrok)
-
-OpenGrok (`search.lab`) cross-references and full-text-searches whatever source trees sit under
-`volumes/opengrok/src`, one project per top-level dir. It's anonymous and read-only — no login,
-no bootstrap step. Stage code with `./ingest-repos.sh` (offline; extracts archives or copies a
-dir in), then it reindexes on its timer (`SYNC_PERIOD_MINUTES`, default 15) or on restart:
-
-```bash
-./ingest-repos.sh ~/incoming/*.tar.gz      # or a directory: ./ingest-repos.sh ~/src/myproject
+./ingest-repos.sh ~/incoming/*.tar.gz      # extracts archives, or copies a directory in
 docker compose restart opengrok            # index now instead of waiting for the timer
 ```
 
-**The chown pattern.** OpenGrok's entrypoint runs as root and **chowns `/opengrok/src` to its
-`appuser` (uid 1111) on every boot.** Two consequences worth remembering:
+One project per top-level dir under `volumes/opengrok/src`; reindexed on startup and every
+`SYNC_PERIOD_MINUTES`. If a later ingest can't write the dir (OpenGrok chowns it to uid 1111 on
+boot), take it back first: `sudo chown -R "$USER" volumes/opengrok/src`.
 
-- The src mount **must be writable**. A `:ro` mount makes the boot-time chown fail, the container
-  exits, and the only symptom is a **Caddy 502** (an empty 502, not an OpenGrok error page).
-  `compose/opengrok.yaml` mounts src read-write for exactly this reason — don't re-add `:ro`.
-- After the first boot, `volumes/opengrok/src` is owned by uid 1111, so a later
-  `./ingest-repos.sh` run as your own user can't write into it. Take ownership back first;
-  OpenGrok silently re-chowns it on its next start (harmless — indexing only reads it):
+---
 
-  ```bash
-  sudo chown -R "$USER" volumes/opengrok/src
-  ./ingest-repos.sh ...
-  docker compose restart opengrok
-  ```
+## Re-stage offline docs
 
-The service has a healthcheck against `/api/v1/system/ping`, so a crash-loop like the `:ro` case
-shows up as **unhealthy** in `docker compose ps` instead of silently 502-ing.
+**Description.** Refresh the cppreference / x86 / tldr content.
+**When to use.** Updating the offline references. Needs internet (run on a box with it; the
+`tldr` target also needs docker — it builds the PWA in a node container).
+
+```bash
+./fetch-docs.sh                 # all of them
+./fetch-docs.sh cppreference    # one target
+# if staged elsewhere, rsync the dir(s) into the host's volumes/, then:
+docker compose restart cppreference x86 tldr
+```
+
+---
+
+## Smoke-test and health
+
+**Description.** Verify every service end-to-end (DNS, TLS chain, HTTP, step-ca, WebDAV, SMB,
+MinIO, Forgejo packages, sessions).
+**When to use.** After install, a restore, or an image bump.
+
+```bash
+docker compose ps                 # all Up; Forgejo migrates for a few seconds on first boot
+./test.sh                         # exits non-zero if any check fails (skips don't fail it)
+docker compose logs -f <service>  # follow one service
+```
+
+`test.sh` reaches services with `curl --resolve` / `--add-host` / SMB-by-IP, so it passes from
+the host even when the host's own resolver isn't pointed at Technitium.
+
+---
+
+## Update images and everyday compose
+
+**Description.** The common lifecycle commands.
+**When to use.** Routine maintenance.
+
+```bash
+docker compose pull && docker compose up -d    # update images
+docker compose restart caddy                   # re-issue / reload after a TLS change
+docker compose restart webdav                  # apply a config/nginx/nginx.conf edit
+docker compose down                            # stop everything (volumes/ data is kept)
+docker compose cp step-ca:/home/step/certs/root_ca.crt ./lab-root-ca.crt   # re-export the CA
+```
+
+---
+
+## Rename the TLD
+
+**Description.** Change the lab's TLD from `lab` to something else.
+**When to use.** Rarely — the default `lab` is fine for most setups.
+
+```bash
+$EDITOR .env                                   # change LAB_DOMAIN
+docker compose up -d --force-recreate && ./bootstrap.sh
+```
+
+`LAB_DOMAIN` is interpolated into every `caddy:` and `homepage.*` label and read by
+`bootstrap.sh`; nothing else hardcodes the TLD.

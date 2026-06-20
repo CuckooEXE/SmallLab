@@ -21,7 +21,6 @@
 #
 set -euo pipefail
 
-# --- locate & load config ---------------------------------------------------
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -44,7 +43,7 @@ CA_OUT="$SCRIPT_DIR/lab-root-ca.crt"    # step-ca's root -> the CA clients must 
 CA_SRC="/home/step/certs/root_ca.crt"   # path inside the step-ca container
 STEPCA_CERT_TTL="${STEPCA_CERT_TTL:-2160h}"   # ACME cert lifetime (2160h = 90 days)
 
-# --- pretty output ----------------------------------------------------------
+# Colored status logging helpers.
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '   \033[1;32mok\033[0m %s\n' "$*"; }
 warn() { printf '   \033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -70,7 +69,6 @@ tapi() {
   curl -fsS --max-time 15 "$url"
 }
 
-# --- 1. wait for Technitium -------------------------------------------------
 log "waiting for Technitium at $TECH"
 for i in $(seq 1 60); do
   if curl -fsS --max-time 3 "$TECH/api/user/login" >/dev/null 2>&1; then
@@ -80,9 +78,7 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
-# --- 2. authenticate --------------------------------------------------------
-# Technitium's built-in admin is always named "admin" (no env renames it); only its
-# password comes from .env, so we log in as admin / LAB_PASSWORD.
+# Technitium's built-in admin is always named "admin"; only its password comes from .env.
 log "logging in to Technitium as 'admin'"
 resp="$(curl -fsS --max-time 15 \
   "$TECH/api/user/login?user=admin&pass=$(urlenc "$LAB_PASSWORD")")" \
@@ -92,11 +88,10 @@ resp="$(curl -fsS --max-time 15 \
 TOKEN="$(jq -r '.token' <<<"$resp")"
 ok "authenticated"
 
-# --- 2b. ensure the shared admin user (LAB_USER) in Technitium --------------
-# Technitium's built-in admin can't be renamed, so to give the DNS console the SAME login
-# as everything else, add LAB_USER to the Administrators group alongside it (same password).
-# The built-in 'admin' stays as a fallback. Skipped when LAB_USER is literally 'admin'.
-# Idempotent: an existing user is kept and its Administrators membership re-asserted.
+# ensure_technitium_admin_user -- add LAB_USER to Technitium's Administrators group so the
+# DNS console takes the same login as everything else (the built-in 'admin' stays as a
+# fallback). Skipped when LAB_USER is 'admin'. Idempotent: an existing user is kept and its
+# Administrators membership re-asserted.
 ensure_technitium_admin_user() {
   [[ "$LAB_USER" == "admin" ]] && { ok "Technitium login is the built-in 'admin'"; return 0; }
   log "ensuring Technitium admin user '$LAB_USER'"
@@ -105,29 +100,32 @@ ensure_technitium_admin_user() {
     "user=$(urlenc "$LAB_USER")" "displayName=$(urlenc "Lab Admin")" "pass=$(urlenc "$LAB_PASSWORD")")" || true
   case "$(jq -r '.status // "error"' <<<"$resp")" in
     ok) ok "user '$LAB_USER' created" ;;
-    *)  grep -qi 'already exists' <<<"$resp" && ok "user '$LAB_USER' already exists" \
-          || { warn "could not create Technitium user: $(jq -r '.errorMessage // .' <<<"$resp")"; return 1; } ;;
+    *)  if grep -qi 'already exists' <<<"$resp"; then
+          ok "user '$LAB_USER' already exists"
+        else
+          warn "could not create Technitium user: $(jq -r '.errorMessage // .' <<<"$resp")"; return 1
+        fi ;;
   esac
   # Re-assert Administrators membership (idempotent for a new or pre-existing user).
   resp="$(tapi admin/users/set "user=$(urlenc "$LAB_USER")" "memberOfGroups=Administrators")" || true
-  [[ "$(jq -r '.status // "error"' <<<"$resp")" == "ok" ]] \
-    && ok "'$LAB_USER' is in the Administrators group" \
-    || { warn "could not add '$LAB_USER' to Administrators: $(jq -r '.errorMessage // .' <<<"$resp")"; return 1; }
+  if [[ "$(jq -r '.status // "error"' <<<"$resp")" == "ok" ]]; then
+    ok "'$LAB_USER' is in the Administrators group"
+  else
+    warn "could not add '$LAB_USER' to Administrators: $(jq -r '.errorMessage // .' <<<"$resp")"; return 1
+  fi
 }
 ensure_technitium_admin_user \
   || warn "Technitium user setup incomplete -- the built-in 'admin' still works; re-run ./bootstrap.sh"
 
-# --- 3. create the zone -----------------------------------------------------
 log "ensuring primary zone '$LAB_DOMAIN'"
 resp="$(tapi zones/create "zone=$(urlenc "$LAB_DOMAIN")" "type=Primary")" || true
 case "$(jq -r '.status // "error"' <<<"$resp")" in
   ok) ok "zone created" ;;
-  *)  grep -qi 'already exists' <<<"$resp" && ok "zone already exists" \
-        || die "zone create failed: $resp" ;;
+  *)  if grep -qi 'already exists' <<<"$resp"; then ok "zone already exists"; else die "zone create failed: $resp"; fi ;;
 esac
 
-# --- 4. point the records at the host --------------------------------------
-add_a() {  # add_a <name> <ip>
+# add_a <name> <ip> -- write (overwrite) an A record in the lab zone pointing <name> at <ip>.
+add_a() {
   local name="$1" ip="$2" resp
   resp="$(tapi zones/records/add \
     "domain=$(urlenc "$name")" "zone=$(urlenc "$LAB_DOMAIN")" \
@@ -150,7 +148,6 @@ add_a "*.terminal.$LAB_DOMAIN" "$HOST_IP"   # <name>.terminal.lab  (ttyd termina
 add_a "code.$LAB_DOMAIN"     "$HOST_IP"  # control UI (else NODATA -> no cert, won't resolve)
 add_a "terminal.$LAB_DOMAIN" "$HOST_IP"  # control UI (else NODATA -> no cert, won't resolve)
 
-# --- 5. export step-ca's root CA -------------------------------------------
 log "exporting step-ca root CA"
 exported=0
 for i in $(seq 1 30); do
@@ -164,7 +161,6 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# --- 6. set the ACME certificate lifetime (step-ca default is 24h) ---------
 log "ensuring ACME certificate lifetime = $STEPCA_CERT_TTL"
 claims_result="$(docker compose exec -T -e DUR="$STEPCA_CERT_TTL" step-ca sh 2>/dev/null <<'EOSH'
 set -e
@@ -189,28 +185,24 @@ else
   ok "lifetime already $STEPCA_CERT_TTL"
 fi
 
-# --- 7. reload Caddy now that DNS resolves and the CA exists ----------------
-# Caddy can only obtain certs once *.lab resolves (step 4) and it trusts step-ca's
-# root (mounted from the shared volume). Restarting makes issuance happen now
-# instead of on Caddy's next retry.
+# Caddy can only issue certs once *.lab resolves and step-ca's root exists, so restart it to
+# trigger issuance now instead of on its next retry.
 if [[ "$exported" == "1" ]]; then
   log "reloading Caddy to trigger certificate issuance"
-  docker compose restart caddy >/dev/null 2>&1 && ok "Caddy reloaded" \
-    || warn "could not restart Caddy; run 'docker compose restart caddy' yourself"
+  if docker compose restart caddy >/dev/null 2>&1; then
+    ok "Caddy reloaded"
+  else
+    warn "could not restart Caddy; run 'docker compose restart caddy' yourself"
+  fi
 fi
 
-# --- 8. teach vaultwarden to trust the lab CA ------------------------------
-# vaultwarden makes OUTBOUND HTTPS calls to *.lab and so needs the lab root in its OWN trust
-# store (a client connecting *to* a service only needs the CA on the client side).
-# vaultwarden's binary is OpenSSL-linked, so it trusts the system store: install the CA under
-# /usr/local/share/ca-certificates and run update-ca-certificates. That lives in the
-# container's writable layer (lost on --force-recreate / image bump), but re-running bootstrap
-# re-applies it -- which is already the post-recreate routine.
-# Soft-fails throughout: a hiccup here never wedges the rest of the bootstrap.
+# trust_lab_ca -- install the lab root CA into vaultwarden's system trust store so its
+# OUTBOUND HTTPS to *.lab verifies, then restart it to reload the store. The change lives in
+# the container's writable layer (lost on recreate or image bump); re-running bootstrap
+# re-applies it. Soft-fails: a hiccup here never wedges the rest of the bootstrap.
 trust_lab_ca() {
   [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping container CA trust"; return; }
 
-  # vaultwarden: system trust store (OpenSSL-linked binary), then restart so it reloads it.
   if docker compose cp "$CA_OUT" vaultwarden:/usr/local/share/ca-certificates/lab-root-ca.crt >/dev/null 2>&1 \
      && docker compose exec -T vaultwarden update-ca-certificates >/dev/null 2>&1 \
      && docker compose restart vaultwarden >/dev/null 2>&1; then
@@ -222,13 +214,9 @@ trust_lab_ca() {
 log "teaching vaultwarden to trust the lab CA"
 trust_lab_ca
 
-# --- 9. Forgejo: admin user + public packages org --------------------------
-# Forgejo runs headless (INSTALL_LOCK=true) so on first boot it has no users. Create the
-# admin via the CLI inside the container, then create a PUBLIC org named ${FORGEJO_ORG}
-# over the REST API so its packages are anonymously pullable. Packages themselves are
-# created on first push (twine upload, npm publish, docker push) -- nothing to pre-make.
-# Idempotent: an existing user/org is left untouched. Soft-fails so a hiccup here never
-# wedges the rest of the bootstrap; a re-run finishes the job.
+# setup_forgejo -- create the Forgejo admin user (CLI, inside the container) and a PUBLIC org
+# named ${FORGEJO_ORG} (REST API) whose packages are anonymously pullable. Idempotent: an
+# existing user/org is left untouched. Soft-fails so a hiccup never wedges the rest of bootstrap.
 setup_forgejo() {
   local host="packages.${LAB_DOMAIN}"
   local base="https://${host}/api/v1"
@@ -245,7 +233,7 @@ setup_forgejo() {
     fc+=(--insecure)
   fi
 
-  # --- wait for the HTTP API to report healthy --------------------------------
+  # Wait for the HTTP API to report healthy.
   log "waiting for Forgejo at https://${host}"
   local i ready=0
   for i in $(seq 1 "$FORGEJO_WAIT_RETRIES"); do
@@ -257,7 +245,7 @@ setup_forgejo() {
   [[ "$ready" == 1 ]] || { warn "Forgejo never became ready. Check 'docker compose ps forgejo',
         then re-run ./bootstrap.sh (it's idempotent)."; return 1; }
 
-  # --- ensure the admin user (CLI, inside the container) ----------------------
+  # Ensure the admin user (CLI, inside the container).
   log "ensuring Forgejo admin '$LAB_USER'"
   local out
   if out="$(docker compose exec -T --user git forgejo forgejo admin user create \
@@ -270,7 +258,7 @@ setup_forgejo() {
     warn "could not create admin user: $out"; return 1
   fi
 
-  # --- ensure the public packages org -----------------------------------------
+  # Ensure the public packages org.
   log "ensuring public org '$org'"
   local code
   code="$("${fc[@]}" -o /dev/null -w '%{http_code}' "${base}/orgs/${org}")"
@@ -279,8 +267,11 @@ setup_forgejo() {
   else
     code="$("${fc[@]}" -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             --data "$(jq -nc --arg n "$org" '{username:$n, visibility:"public"}')" "${base}/orgs")"
-    [[ "$code" == 2?? ]] && ok "org '$org' created (public)" \
-      || { warn "creating org '$org' failed (HTTP $code)"; return 1; }
+    if [[ "$code" == 2?? ]]; then
+      ok "org '$org' created (public)"
+    else
+      warn "creating org '$org' failed (HTTP $code)"; return 1
+    fi
   fi
 
   ok "Forgejo configured: admin '$LAB_USER', public org '$org'"
@@ -290,14 +281,12 @@ log "configuring Forgejo (admin user + packages org)"
 setup_forgejo \
   || warn "Forgejo auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
-# --- 10. Forgejo Actions runner: register via the shared-secret flow ---------
-# Air-gapped registration with no token round-trip: a 40-hex secret is the shared identity.
-# ALL runner-volume reads/writes go through `docker compose exec` (i.e. as the container's
-# own uid 1000), so they work regardless of who owns volumes/forgejo-runner on the host --
-# the host user that runs bootstrap is NOT uid 1000 and can't write into that dir directly.
-# Idempotent + soft-failing: if the runner is already registered we stop; otherwise the
-# secret is generated once, persisted in the data volume, and reused on every re-run (a fresh
-# secret would register a *second* runner, since the secret's first 16 hex are its identity).
+# setup_forgejo_runner -- register the Forgejo Actions runner using a 40-hex shared secret.
+# All runner-volume access goes through `docker compose exec` (as the container's uid 1000),
+# since the host user can't write into that dir directly. Idempotent + soft-failing: an
+# already-registered runner is left alone; otherwise the secret is generated once, persisted
+# in the data volume, and reused on every re-run (a fresh secret would register a second
+# runner, since the secret's first 16 hex are its identity).
 setup_forgejo_runner() {
   local name="lab-runner"
 
@@ -331,8 +320,7 @@ setup_forgejo_runner() {
     fi
   fi
 
-  # 2. register on the forge (idempotent global runner). The shared LAB posture already passes
-  #    secrets on the exec argv (see the admin-create above), so --secret is fine here.
+  # 2. Register on the forge (idempotent for a global runner).
   log "registering Forgejo runner '$name' on the forge"
   if docker compose exec -T --user git forgejo \
        forgejo forgejo-cli actions register --name "$name" --secret "$secret" >/dev/null 2>&1; then
@@ -355,11 +343,10 @@ log "configuring the Forgejo Actions runner"
 setup_forgejo_runner \
   || warn "Forgejo runner setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
-# OpenGrok (search.lab) needs no bootstrap: it's anonymous + read-only and indexes whatever is
-# under volumes/opengrok/src on startup and every SYNC_PERIOD_MINUTES. Stage code with
-# ./ingest-repos.sh (see the next-steps note below).
+# OpenGrok (search.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
+# every SYNC_PERIOD_MINUTES. Stage code with ./ingest-repos.sh.
 
-# --- next steps -------------------------------------------------------------
+# Print the client-side setup instructions.
 cat <<EOF
 
 $(printf '\033[1;32mBootstrap complete.\033[0m')  Dashboard: https://home.$LAB_DOMAIN

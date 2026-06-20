@@ -1,4 +1,4 @@
-# offline data-mangling swiss army knife (https://cyberchef.lab).
+# CyberChef -- offline data-mangling swiss army knife (cyberchef.lab).
 services:
   cyberchef:
     image: mpepping/cyberchef@sha256:afbf73568a976474ec972e62939ac70d4917136ed274c81b5498ee1e7d406493  # CyberChef 1.30.3

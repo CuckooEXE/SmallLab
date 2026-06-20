@@ -1,6 +1,5 @@
-# x86 instruction-set reference, served offline (x86.lab). A static mirror of c9x.me/x86/
-# (the x86/x64 instruction reference), staged into volumes/x86 by ./fetch-docs.sh during the
-# online provisioning window. Stock nginx over the static mirror; read-only, no state.
+# x86 -- offline x86/x64 instruction-set reference (x86.lab). nginx over a static mirror of
+# c9x.me/x86/ in volumes/x86, staged by ./fetch-docs.sh. Read-only, no state.
 services:
   x86:
     image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine

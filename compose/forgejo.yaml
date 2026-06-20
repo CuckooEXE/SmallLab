@@ -1,12 +1,7 @@
-# Forgejo -- Git forge + universal package registry at packages.lab.
-# One SQLite-backed container serves the web UI, REST API, every package registry
-# (PyPI, npm, Maven, Cargo, NuGet, Go, Helm, RubyGems, Debian, RPM, ...) AND the
-# Docker/OCI registry (/v2/) on a single HTTP port behind Caddy.
-#
-# Headless setup: INSTALL_LOCK skips the web installer and the DB auto-migrates on
-# first boot. bootstrap.sh then creates the admin user and the packages org. Forgejo's
-# own secrets (SECRET_KEY, internal token) are generated on first run into the data
-# volume -- nothing to manage by hand.
+# Forgejo -- Git forge + universal package registry (packages.lab). One SQLite-backed
+# container serves the web UI, REST API, every package registry (PyPI, npm, Maven, Cargo,
+# NuGet, Go, Helm, RubyGems, Debian, RPM, ...) and the Docker/OCI registry (/v2/) behind Caddy.
+# Headless (INSTALL_LOCK); bootstrap.sh creates the admin user and packages org.
 services:
   forgejo:
     image: codeberg.org/forgejo/forgejo@sha256:d98d860ea64fd36cb0aabf0b46bbe1a37566b498eee4af0a6b246d5a45759d6d  # 11.0.15 (LTS)
@@ -26,9 +21,7 @@ services:
       - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false    # anonymous viewing -> anonymous package pull
       - FORGEJO__packages__ENABLED=true
       - FORGEJO__actions__ENABLED=true                 # CI: paired with compose/forgejo-runner.yaml
-      # Air-gapped: resolve `uses: actions/checkout@v4` against THIS forge instead of the
-      # internet (default is code.forgejo.org). Mirror the action repos locally, or write
-      # workflows with plain `run:` steps. See README "Forgejo Actions (CI)".
+      # Resolve `uses:` actions against this forge, not the internet (mirror repos locally).
       - FORGEJO__actions__DEFAULT_ACTIONS_URL=self
     volumes:
       - ../volumes/forgejo:/data

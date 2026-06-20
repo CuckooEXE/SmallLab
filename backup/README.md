@@ -1,104 +1,77 @@
-# Lab backups — rsync hard-link snapshots
+# SmallLab backups — rsync hard-link snapshots
 
-Dead simple: every 3 hours, `rsync` the stack's `volumes/` tree into a new dated
-directory. Unchanged files are **hardlinks** to the previous backup (`rsync
---link-dest`), so keeping many snapshots costs about one full copy plus the changes —
-no dedup engine, no special format. Each snapshot is a plain, browsable copy.
+Every 3 hours, `rsync` copies the stack's `volumes/` tree into a new dated directory. Unchanged
+files are hardlinked to the previous snapshot (`rsync --link-dest`), so many snapshots cost
+about one full copy plus the deltas — no dedup engine, no special format. Each snapshot is a
+plain, browsable copy; recovery is one rsync back, then `docker compose up`.
 
 ```
 DEST/
   20260619T000000/   caddy/  stepca/  technitium/  forgejo/  minio/  share/  ...
   20260619T030000/   (unchanged files hardlinked to 00:00; only deltas are new)
-  20260619T060000/
-  latest -> 20260619T060000
+  latest -> 20260619T030000
 ```
 
-Recovery is just rsyncing one of those directories back, then `docker compose up`.
+## How it works
 
-## The three requirements
-
-- **No downtime.** The backup is a plain hot `rsync` — containers are never touched.
-  *Caveat:* rsync reads files over a span of time, so a database being actively
-  written (Forgejo's SQLite, filebrowser's BoltDB, step-ca's badger store) could be
-  copied torn. These LAN services are near-idle, so the risk is small; if you want a
-  guaranteed copy, set `PAUSE_CONTAINERS=1` — it briefly `docker pause`s the stack during
-  the copy (a cgroup **freeze**, not a stop/restart; the containers stay up). The static
-  volumes (caddy, the MinIO object store) are fine hot regardless.
-- **One-command recovery.** `lab-restore.sh restore latest` rsyncs a snapshot into
-  the repo's `volumes/` dir; then `docker compose up -d`.
-- **Your retention curve, auto-expiring at 3 months.** Backups run every 3h;
-  `lab-backup.sh` keeps the snapshot nearest each of your ages — 3h, 6h, 12h, 18h,
-  1d, 2d, 3d, 4d, 5d, 1w, 2w, 4w, 1mo, 3mo — deletes the rest, and hard-deletes
-  anything older than 3 months. (The exact list, not an approximation — edit
-  `KEEP_AGES` in the script to change it; the prune is `prune()` in the script.)
+- **Hot by default.** Containers are never touched. A DB written mid-copy (Forgejo's SQLite,
+  filebrowser's BoltDB, step-ca's badger store) could be copied torn; these LAN services are
+  near-idle, so the risk is small. Set `PAUSE_CONTAINERS=1` for a guaranteed copy — it briefly
+  `docker pause`s the stack (a cgroup freeze, not a stop/restart).
+- **Retention.** Keeps the snapshot nearest each of: 3h, 6h, 12h, 18h, 1d, 2d, 3d, 4d, 5d, 1w,
+  2w, 4w, 1mo, 3mo; deletes the rest; hard-deletes anything older than 3 months. Edit
+  `KEEP_AGES` in `lab-backup.sh` to change it.
+- **One-command recovery.** `lab-restore.sh restore latest` rsyncs a snapshot back into a
+  `volumes/` dir.
 
 ## What's backed up
 
-Just **`volumes/`** — every service's runtime state (step-ca's PKI, Forgejo's data +
-package store, the MinIO objects, the file share, the embedded DBs). Everything else is
-reproducible from git: `compose.yaml`, the per-service files under `compose/`, the scripts,
-and the checked-in `config/`. Two git-ignored files are neither volumes nor in git — `.env`
-(secrets) and `lab-root-ca.crt` (step-ca's exported root); keep those in a password
-manager for a full rebuild.
+Just `volumes/` — every service's runtime state (step-ca's PKI, Forgejo's data + package store,
+MinIO objects, the file share, the embedded DBs). Everything else is reproducible from git.
+`.env` and `lab-root-ca.crt` are neither volumes nor in git — keep them in a password manager.
 
 ## Setup
 
-Runs wherever you want the backups stored — typically a **separate backup server**
-that pulls from the docker host (so the host can't reach the backups), or the host
-itself writing to a mounted NAS.
+Runs on a separate backup server that pulls from the docker host (so the host can't reach the
+backups), or on the host writing to a mounted NAS. The two-server walkthrough is in
+[`../README.md`](../README.md#backup-server); in short:
 
 ```bash
-# 1. config
 sudo install -d /etc/lab-backup
 sudo cp backup/config.env.example /etc/lab-backup/config.env
-sudoedit /etc/lab-backup/config.env          # set SRC, DEST, SSH_RSH
-
-# 2. if pulling over ssh: give this box a key the docker host trusts
-ssh-keygen -t ed25519 -f /root/.ssh/lab-backup -N ''
-ssh-copy-id -i /root/.ssh/lab-backup root@dockerhost.lab   # needs root to read volumes
-
-# 3. schedule it
+sudoedit /etc/lab-backup/config.env          # set SRC, DEST, SSH_RSH, RESTORE_TARGET
 sudo install -m755 backup/lab-backup.sh   /opt/lab-backup/lab-backup.sh
 sudo install -m755 backup/lab-restore.sh  /opt/lab-backup/lab-restore.sh
 sudo cp backup/systemd/lab-backup.* /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now lab-backup.timer
-
-# 4. test
-sudo /opt/lab-backup/lab-backup.sh
-/opt/lab-backup/lab-restore.sh list
+sudo /opt/lab-backup/lab-backup.sh           # prove it works
 ```
 
-Prefer cron? One line does the same as the timer:
+Cron equivalent of the timer:
 
 ```cron
 0 */3 * * *  LAB_BACKUP_CONFIG=/etc/lab-backup/config.env /opt/lab-backup/lab-backup.sh >> /var/log/lab-backup.log 2>&1
 ```
 
-## Restore / disaster recovery
+## Restore
 
 ```bash
 ./backup/lab-restore.sh list                        # pick a snapshot (or 'latest')
-# onto THIS host's volumes (stop the stack first if it's running):
-sudo ./backup/lab-restore.sh restore latest --target /opt/lab/volumes
-# or push to a brand-new host before its first `up`:
-./backup/lab-restore.sh restore latest --to root@newhost:/opt/lab/volumes
+sudo ./backup/lab-restore.sh restore latest --target /opt/lab/volumes   # onto this host (stop the stack first)
+./backup/lab-restore.sh restore latest --to root@newhost:/opt/lab/volumes   # push to a new host
 docker compose up -d && ./bootstrap.sh
 ```
 
-The whole `volumes/` tree comes back exactly — same paths, perms and UIDs — so
-`docker compose up` bind-mounts it straight back in. Add `--force` to skip the
-overwrite prompt. (`/opt/lab` here = wherever the repo is checked out on that host;
-the default target is `RESTORE_TARGET` from the config.)
+The tree comes back with the same paths, perms, and UIDs (`rsync -aH --numeric-ids`), so the
+stack mounts it straight back in. `--force` skips the overwrite prompt.
 
 ## Notes
 
-- `DEST` should be on a different machine/disk than the docker host — a hardlink farm
-  on the same dying disk isn't a backup. The common setup is the pull model in step 2.
-- `rsync --numeric-ids` preserves container UIDs across hosts; `-aH` preserves perms
-  and any hardlinks inside a volume.
-- **Test a restore now and then.** A backup you've never restored isn't a backup.
-- Want off-site too? Point a second timer at `rsync -aH DEST/ user@offsite:/backups/`
-  or `rclone sync DEST remote:lab`.
+- `DEST` should be on a different machine/disk than the docker host — a hardlink farm on the
+  same dying disk isn't a backup.
+- Test a restore now and then; a backup you've never restored isn't a backup.
+- Off-site: point a second timer at `rsync -aH DEST/ user@offsite:/backups/` or
+  `rclone sync DEST remote:lab`.
 
 ## Files
 

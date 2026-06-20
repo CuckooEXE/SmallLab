@@ -1,6 +1,5 @@
-# Internal ACME CA -> issues TLS for every site (Caddy is a client).
-# First boot auto-inits a PKI with an ACME provisioner (named "acme"). The root,
-# keys, and init password persist in volumes/stepca, so restarts are unattended.
+# step-ca -- internal ACME CA that issues TLS for every site (ca.lab:9000). First boot
+# auto-inits a PKI with an ACME provisioner; root, keys, and password persist in volumes/stepca.
 services:
   step-ca:
     image: smallstep/step-ca@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270  # step-ca 0.30.2
@@ -18,8 +17,7 @@ services:
     volumes:
       - ../volumes/stepca:/home/step
     healthcheck:
-      # Healthy only once the PKI is initialised -> Caddy waits for this so it never
-      # loads a config that references a not-yet-written acme_ca_root.
+      # Healthy once the PKI is initialised; Caddy waits on this.
       test: ["CMD-SHELL", "test -f /home/step/certs/root_ca.crt"]
       interval: 3s
       timeout: 2s

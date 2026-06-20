@@ -1,8 +1,5 @@
-# cppreference -- the C / C++ standard library reference, served fully offline (cppref.lab).
-# Stock nginx over a static copy of the official offline HTML archive (PeterFeicht's
-# html-book). Content is staged into volumes/cppreference by ./fetch-docs.sh during the
-# online provisioning window (the docs analog of `docker compose pull`); nothing is fetched
-# at runtime. Read-only, no state.
+# cppreference -- offline C/C++ standard library reference (cppref.lab). nginx over the static
+# PeterFeicht html-book in volumes/cppreference, staged by ./fetch-docs.sh. Read-only, no state.
 services:
   cppreference:
     image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine

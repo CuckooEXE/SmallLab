@@ -42,8 +42,11 @@ collect() {  # collect [selector ...]
   [[ ${#sels[@]} -eq 0 ]] && sels=("${!BASE_FOR[@]}")
   for sel in "${sels[@]}"; do
     if [[ "$sel" == */* ]]; then
-      [[ -f "$PROFILES_DIR/$sel/Dockerfile" ]] && printf '%s\n' "$sel" \
-        || warn "skip '$sel' (no $PROFILES_DIR/$sel/Dockerfile)"
+      if [[ -f "$PROFILES_DIR/$sel/Dockerfile" ]]; then
+        printf '%s\n' "$sel"
+      else
+        warn "skip '$sel' (no $PROFILES_DIR/$sel/Dockerfile)"
+      fi
     else
       kind="$sel"
       [[ -n "${BASE_FOR[$kind]:-}" ]] || { warn "skip '$kind' (unknown kind; known: ${!BASE_FOR[*]})"; continue; }

@@ -1,21 +1,8 @@
 # Forgejo Actions runner -- the CI half of the forge. Registers to Forgejo over the internal
-# `caddy` network (http://forgejo:3000) and executes Actions workflows. It drives the HOST
-# Docker daemon via the mounted socket (the same access Dozzle/Homepage already use) and runs
-# each job as a SIBLING container on the `caddy` network -- so jobs reach the forge for
-# `actions/checkout` and package pulls without going off-box. Job/label policy + the job
-# network live in config/forgejo-runner/config.yaml.
-#
-# !! TRUST: a CI runner with the Docker socket can create privileged containers = effectively
-# root on the host. That matches this stack's posture (open LAN, socket already shared). It
-# runs as its own uid (1000) + the host `docker` group (DOCKER_GID) rather than root. For
-# stronger isolation switch to the docker-in-docker variant -- see Playbook.
-#
-# Registration is the air-gapped SHARED-SECRET flow (no token round-trip): bootstrap.sh
-# generates a 40-hex secret (volumes/forgejo-runner/secret), registers it on the Forgejo side
-# (`forgejo forgejo-cli actions register`, idempotent) and writes the runner file
-# (`forgejo-runner create-runner-file`). This container runs a tiny waiter that blocks until
-# that .runner file exists, then execs the daemon -- so a plain `up` before bootstrap just
-# waits quietly instead of crash-looping.
+# network and runs each job as a sibling container on the `caddy` network (so jobs reach
+# http://forgejo:3000). Drives the host Docker socket = root-equivalent (LAN-trust posture).
+# Job/label policy lives in config/forgejo-runner/config.yaml. bootstrap.sh registers it via
+# the shared-secret flow; the command below waits for that .runner file, then runs the daemon.
 services:
   forgejo-runner:
     image: data.forgejo.org/forgejo/runner@sha256:fb38cf65183f935821b930de7bd27c303aa188d297be709c762dae564f838402  # 9.1.1
@@ -31,8 +18,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - caddy
-    # Wait for bootstrap to drop the registration file, then run the daemon. Re-exec-safe:
-    # once /data/.runner exists the daemon starts immediately on every (re)start.
+    # Wait for bootstrap to write /data/.runner, then run the daemon.
     command:
       - /bin/sh
       - -c

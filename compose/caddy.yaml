@@ -21,11 +21,9 @@ services:
     networks:
       - caddy
     labels:
-      # Global options (no `caddy:` site key -> emitted outside all server blocks).
-      # Every site gets its certs from step-ca's ACME endpoint.
+      # Global options (no site key): every site gets its certs from step-ca's ACME endpoint.
       caddy.acme_ca: https://step-ca:9000/acme/acme/directory
       caddy.acme_ca_root: /stepca/certs/root_ca.crt
-      # Homepage discovers this container from these labels (see config/homepage/docker.yaml)
       homepage.group: Infrastructure
       homepage.name: Caddy
       homepage.icon: /icons/caddy.png

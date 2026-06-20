@@ -1,3 +1,2 @@
-# Empty on purpose. Like services.yaml, a missing bookmarks.yaml is regenerated with
-# live example bookmarks, so [] suppresses them. Add bookmarks here if you want a row.
+# Empty on purpose: a missing file is regenerated with demo bookmarks, so [] suppresses them.
 []

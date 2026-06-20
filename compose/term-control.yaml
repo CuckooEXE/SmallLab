@@ -1,14 +1,8 @@
-# term-control -- on-demand browser terminals (https://terminal.lab).
-#
-# One instance of the shared, config-driven control plane (config/session-control/app.py),
-# pointed at terminal.json. It creates / resumes / deletes per-session ttyd containers,
-# each on its own subdomain <name>.terminal.lab (routed live by caddy-docker-proxy) from a
-# baked profile image (profiles/term/ + build-profiles.sh). ttyd runs `tmux new -A -s main`,
-# so a reconnect or a second tab reattaches the same session; /root persists under
-# volumes/term/<name>/root.
-#
-# Same UNAUTHENTICATED, root-equivalent-socket posture as code-control -- put it behind
-# auth first when you add it. (Code sibling: compose/code-control.yaml.)
+# term-control -- on-demand browser terminals (terminal.lab). The shared session-control
+# app (config/session-control/app.py + terminal.json) creates/resumes/deletes per-session
+# ttyd containers at <name>.terminal.lab from baked profiles (profiles/term/); ttyd runs
+# `tmux new -A -s main` so reconnects reattach, and /root persists under volumes/term/<name>/root.
+# Drives the Docker socket; unauthenticated (LAN-trust).
 services:
   term-control:
     image: python:3.12-slim-bookworm@sha256:76d4b7b6305788c6b4c6a19d6a22a3921bf802e9af4d5e1e5bd771208dba74bf
@@ -40,7 +34,4 @@ services:
       homepage.icon: /icons/terminal.svg
       homepage.href: https://terminal.${LAB_DOMAIN}
       homepage.description: Spin up / tear down browser terminals
-      # Pin this "create" tile to the TOP of the Terminals group. Homepage sorts a group by
-      # weight ascending, and session tiles are stamped weight 100 (terminal.json ->
-      # homepage_weight, applied by app.py), so this must stay well below that.
-      homepage.weight: "1"
+      homepage.weight: "1"   # below the session tiles (weight 100) so the create tile sorts first

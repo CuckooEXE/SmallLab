@@ -1,13 +1,6 @@
-# .lab homelab stack -- root compose file.
-#
-# Service definitions are split one-per-service under compose/ and merged in via the
-# `include:` list below. Shared networks are declared here so every service can join them.
-# Runtime state is bind-mounted under volumes/ (git-ignored); checked-in config lives
-# under config/.
-#
-# Bring it up from THIS directory (it auto-discovers compose.yaml and reads .env):
-#   docker compose up -d
-#   ./bootstrap.sh
+# .lab homelab stack -- root compose file. Services are split one-per-file under compose/
+# and merged via `include:`; shared networks are declared here. Bring it up from this dir:
+#   docker compose up -d && ./bootstrap.sh
 
 name: lab
 
@@ -17,9 +10,9 @@ include:
   - compose/homepage.yaml
   - compose/technitium.yaml
   - compose/ntp.yaml
-  - compose/dhcp.yaml   # opt-in: only starts under `--profile dhcp` (see compose/dhcp.yaml)
+  - compose/dhcp.yaml   # opt-in (--profile dhcp)
   - compose/forgejo.yaml
-  - compose/forgejo-runner.yaml   # Forgejo Actions CI runner (registers in bootstrap.sh)
+  - compose/forgejo-runner.yaml   # Actions CI runner (registered by bootstrap.sh)
   - compose/minio.yaml
   - compose/samba.yaml
   - compose/filebrowser.yaml
@@ -32,22 +25,16 @@ include:
   - compose/vaultwarden.yaml
   - compose/dozzle.yaml
   - compose/compiler-explorer.yaml # Godbolt -- source to asm
-  - compose/code-control.yaml      # on-demand code-server workspaces (code.lab + *.code.lab)
-  - compose/term-control.yaml      # on-demand browser terminals (terminal.lab + *.terminal.lab)
-  - compose/opengrok.yaml          # code search + cross-reference over local repos (./ingest-repos.sh)
-  # Offline programming references (content staged by ./fetch-docs.sh):
+  - compose/code-control.yaml      # on-demand code-server workspaces (code.lab)
+  - compose/term-control.yaml      # on-demand browser terminals (terminal.lab)
+  - compose/opengrok.yaml          # code search + cross-reference (./ingest-repos.sh)
+  # Offline programming references (staged by ./fetch-docs.sh):
   - compose/cppreference.yaml
   - compose/x86.yaml
-  - compose/tldr.yaml   # tldr-pages PWA (built static site, not a plain-HTML mirror)
+  - compose/tldr.yaml   # tldr-pages PWA
 
 networks:
-  # Ingress: Caddy and every container it reverse-proxies.
-  caddy:
+  caddy:        # ingress: Caddy + everything it reverse-proxies
     name: caddy
-  # Back-of-house: services that publish raw host ports instead of going through Caddy
-  # (samba on 445/139, ntp on 123/udp). Kept off the `caddy` ingress network; they reach
-  # the LAN through their own published ports, which require a normal, non-internal network
-  # -- Docker can't publish host ports through an internal one. (dhcp uses host networking
-  # and joins no Docker network at all.)
-  backend:
+  backend:      # services publishing raw host ports (samba, ntp); dhcp uses host networking
     name: backend

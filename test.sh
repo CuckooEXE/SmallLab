@@ -18,9 +18,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
 
-# --- config -----------------------------------------------------------------
 [[ -f .env ]] || { echo "error: .env not found next to test.sh" >&2; exit 1; }
 # shellcheck disable=SC1091
 set -a; source ./.env; set +a
@@ -31,7 +30,7 @@ CA="$SCRIPT_DIR/lab-root-ca.crt"
 [[ -s "$CA" ]] || { echo "error: $CA missing -- run ./bootstrap.sh first" >&2; exit 1; }
 STAMP="$(date +%Y%m%d%H%M%S)-$$"
 
-# --- harness ----------------------------------------------------------------
+# Test harness: result counters and the pass/fail/skip/section/have helpers.
 PASS=0; FAIL=0; SKIP=0
 pass()    { printf '  \033[1;32mPASS\033[0m  %s\n' "$1"; PASS=$((PASS+1)); }
 fail()    { printf '  \033[1;31mFAIL\033[0m  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '        %s\n' "$2"; FAIL=$((FAIL+1)); }
@@ -49,37 +48,49 @@ get_code() {
   local desc="$1" host="$2" path="$3" want="${4:-200}" code
   code="$(labcurl "$host" -o /dev/null -w '%{http_code}' "https://${host}${path}" 2>/dev/null)" \
     || { fail "$desc" "curl could not connect to ${host}"; return; }
-  [[ "$code" == "$want" ]] && pass "$desc (HTTP $code)" || fail "$desc" "expected $want, got $code"
+  if [[ "$code" == "$want" ]]; then pass "$desc (HTTP $code)"; else fail "$desc" "expected $want, got $code"; fi
 }
 
-# --- 1. DNS (Technitium) ----------------------------------------------------
 section "DNS (Technitium @ ${HOST_IP})"
 if have dig; then
   got="$(dig +short +time=3 +tries=1 @"$HOST_IP" "home.${LAB_DOMAIN}" 2>/dev/null | tail -1)"
-  [[ "$got" == "$HOST_IP" ]] && pass "wildcard *.${LAB_DOMAIN} resolves to host (home.${LAB_DOMAIN} -> $got)" \
-    || fail "wildcard resolution" "home.${LAB_DOMAIN} -> '${got:-<none>}', expected $HOST_IP"
+  if [[ "$got" == "$HOST_IP" ]]; then
+    pass "wildcard *.${LAB_DOMAIN} resolves to host (home.${LAB_DOMAIN} -> $got)"
+  else
+    fail "wildcard resolution" "home.${LAB_DOMAIN} -> '${got:-<none>}', expected $HOST_IP"
+  fi
   got="$(dig +short +time=3 +tries=1 @"$HOST_IP" "packages.${LAB_DOMAIN}" 2>/dev/null | tail -1)"
-  [[ "$got" == "$HOST_IP" ]] && pass "packages.${LAB_DOMAIN} -> $got" \
-    || fail "packages.${LAB_DOMAIN} resolution" "got '${got:-<none>}'"
+  if [[ "$got" == "$HOST_IP" ]]; then
+    pass "packages.${LAB_DOMAIN} -> $got"
+  else
+    fail "packages.${LAB_DOMAIN} resolution" "got '${got:-<none>}'"
+  fi
   got="$(dig +short +time=3 +tries=1 @"$HOST_IP" example.com 2>/dev/null | tail -1)"
-  [[ -n "$got" ]] && pass "recursive forwarding works (example.com -> $got)" \
-    || fail "recursive forwarding" "example.com did not resolve via the lab DNS"
+  if [[ -n "$got" ]]; then
+    pass "recursive forwarding works (example.com -> $got)"
+  else
+    fail "recursive forwarding" "example.com did not resolve via the lab DNS"
+  fi
 else
   skip "DNS checks" "dig not installed"
 fi
 
-# --- 2. TLS chain to the lab root CA ----------------------------------------
 section "TLS (step-ca -> Caddy, verified against lab-root-ca.crt)"
 vr="$(labcurl "home.${LAB_DOMAIN}" -o /dev/null -w '%{ssl_verify_result}' "https://home.${LAB_DOMAIN}/" 2>/dev/null)"
-[[ "$vr" == "0" ]] && pass "home.${LAB_DOMAIN} cert verifies against the lab root CA" \
-  || fail "cert verification" "ssl_verify_result=$vr (cert does not chain to lab-root-ca.crt)"
+if [[ "$vr" == "0" ]]; then
+  pass "home.${LAB_DOMAIN} cert verifies against the lab root CA"
+else
+  fail "cert verification" "ssl_verify_result=$vr (cert does not chain to lab-root-ca.crt)"
+fi
 if have openssl; then
   issuer="$(echo | openssl s_client -connect "${HOST_IP}:443" -servername "home.${LAB_DOMAIN}" -CAfile "$CA" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)"
-  grep -qi 'lab CA' <<<"$issuer" && pass "issuer is the lab CA (${issuer#issuer=})" \
-    || fail "cert issuer" "unexpected issuer: ${issuer:-<none>}"
+  if grep -qi 'lab CA' <<<"$issuer"; then
+    pass "issuer is the lab CA (${issuer#issuer=})"
+  else
+    fail "cert issuer" "unexpected issuer: ${issuer:-<none>}"
+  fi
 fi
 
-# --- 3. Web endpoints (through Caddy) ---------------------------------------
 section "HTTP endpoints (through Caddy)"
 get_code "Homepage        home.${LAB_DOMAIN}"        "home.${LAB_DOMAIN}"        "/"
 get_code "Technitium UI   dns.${LAB_DOMAIN}"         "dns.${LAB_DOMAIN}"         "/"
@@ -101,29 +112,29 @@ get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"     
 get_code "x86 ref         x86.${LAB_DOMAIN}"         "x86.${LAB_DOMAIN}"         "/"
 get_code "tldr            tldr.${LAB_DOMAIN}"        "tldr.${LAB_DOMAIN}"        "/"
 
-# --- 4. step-ca health ------------------------------------------------------
 section "step-ca (ACME CA)"
 body="$(curl -sS --max-time 15 --resolve "ca.${LAB_DOMAIN}:9000:${HOST_IP}" --cacert "$CA" "https://ca.${LAB_DOMAIN}:9000/health" 2>/dev/null)"
-grep -q '"status":"ok"' <<<"$body" && pass "ca.${LAB_DOMAIN}:9000/health is ok" \
-  || fail "step-ca health" "response: ${body:-<none>}"
+if grep -q '"status":"ok"' <<<"$body"; then
+  pass "ca.${LAB_DOMAIN}:9000/health is ok"
+else
+  fail "step-ca health" "response: ${body:-<none>}"
+fi
 
-# --- 5. WebDAV (curl GET/PUT/DELETE/MKCOL) ----------------------------------
 section "WebDAV (dav.${LAB_DOMAIN})"
 dav="https://dav.${LAB_DOMAIN}"
 f="smoke-${STAMP}.txt"; d="smoke-dir-${STAMP}"; content="webdav-content-${STAMP}"
 tmp="$(mktemp)"; printf '%s' "$content" > "$tmp"
 code="$(labcurl "dav.${LAB_DOMAIN}" -o /dev/null -w '%{http_code}' -T "$tmp" "${dav}/${f}" 2>/dev/null)"
-[[ "$code" == 201 ]] && pass "PUT ${f} (HTTP $code)" || fail "WebDAV PUT" "expected 201, got $code"
+if [[ "$code" == 201 ]]; then pass "PUT ${f} (HTTP $code)"; else fail "WebDAV PUT" "expected 201, got $code"; fi
 got="$(labcurl "dav.${LAB_DOMAIN}" "${dav}/${f}" 2>/dev/null)"
-[[ "$got" == "$content" ]] && pass "GET ${f} round-trips identical bytes" || fail "WebDAV GET" "body mismatch: '${got}'"
+if [[ "$got" == "$content" ]]; then pass "GET ${f} round-trips identical bytes"; else fail "WebDAV GET" "body mismatch: '${got}'"; fi
 code="$(labcurl "dav.${LAB_DOMAIN}" -o /dev/null -w '%{http_code}' -X MKCOL "${dav}/${d}/" 2>/dev/null)"
-[[ "$code" == 201 ]] && pass "MKCOL ${d}/ (HTTP $code)" || fail "WebDAV MKCOL" "expected 201, got $code"
+if [[ "$code" == 201 ]]; then pass "MKCOL ${d}/ (HTTP $code)"; else fail "WebDAV MKCOL" "expected 201, got $code"; fi
 code="$(labcurl "dav.${LAB_DOMAIN}" -o /dev/null -w '%{http_code}' -X DELETE "${dav}/${d}/" 2>/dev/null)"
-[[ "$code" == 204 ]] && pass "DELETE ${d}/ (HTTP $code)" || fail "WebDAV DELETE dir" "expected 204, got $code"
+if [[ "$code" == 204 ]]; then pass "DELETE ${d}/ (HTTP $code)"; else fail "WebDAV DELETE dir" "expected 204, got $code"; fi
 rm -f "$tmp"
-# leave ${f} in place for the interop check below; it deletes it afterward
+# Leave ${f} in place for the interop check below, which deletes it afterward.
 
-# --- 6. Shared tree interop (WebDAV file readable over SMB) ------------------
 section "File share interop (WebDAV <-> Samba, same tree)"
 if have smbclient; then
   out="$(mktemp)"
@@ -152,7 +163,6 @@ fi
 # clean up the WebDAV test file
 labcurl "dav.${LAB_DOMAIN}" -o /dev/null -X DELETE "${dav}/${f}" 2>/dev/null || true
 
-# --- 7. MinIO object storage (S3 via mc) ------------------------------------
 section "MinIO object storage (s3.${LAB_DOMAIN})"
 if have docker && docker image inspect minio/mc:latest >/dev/null 2>&1; then
   bucket="smoke-${STAMP}"
@@ -177,7 +187,6 @@ else
   skip "MinIO S3 check" "needs the minio/mc image (docker pull minio/mc)"
 fi
 
-# --- 8. Forgejo packages (real publish+install and push+pull) ---------------
 section "Forgejo packages (packages.${LAB_DOMAIN})"
 org="${FORGEJO_ORG:-$LAB_DOMAIN}"
 fauth="${LAB_USER}:${LAB_PASSWORD}"
@@ -187,8 +196,11 @@ vtag="$(date +%s)"
 get_code "Forgejo UI      packages.${LAB_DOMAIN}" "packages.${LAB_DOMAIN}" "/"
 
 code="$(labcurl "packages.${LAB_DOMAIN}" -u "$fauth" -o /dev/null -w '%{http_code}' "${fapi}/orgs/${org}")"
-[[ "$code" == 200 ]] && pass "API authenticated; public org '${org}' present" \
-                     || fail "Forgejo API/org" "GET /orgs/${org} -> $code (is bootstrap done?)"
+if [[ "$code" == 200 ]]; then
+  pass "API authenticated; public org '${org}' present"
+else
+  fail "Forgejo API/org" "GET /orgs/${org} -> $code (is bootstrap done?)"
+fi
 
 # fdel <type/name/version> -- remove a package version so the test stays idempotent.
 fdel() { labcurl "packages.${LAB_DOMAIN}" -u "$fauth" -o /dev/null -X DELETE "${fapi}/packages/${org}/$1" 2>/dev/null || true; }
@@ -199,7 +211,7 @@ if ! have docker; then
   skip "PyPI publish/install"  "needs docker to run the client tools"
   skip "Docker registry push/pull" "needs docker to run the client tools"
 else
-  # --- PyPI: build, twine upload (auth), pip install (anonymous, public org) ---
+  # PyPI: build, twine upload (auth), then anonymous pip install from the public org.
   if ensure_image python:3.12-slim; then
     if docker run --rm \
          --add-host "packages.${LAB_DOMAIN}:${HOST_IP}" \
@@ -229,7 +241,7 @@ else
     skip "PyPI publish/install" "needs the python:3.12-slim image"
   fi
 
-  # --- Docker/OCI: skopeo push (auth) + pull (anonymous), daemonless ----------
+  # Docker/OCI: skopeo push (auth) + pull (anonymous), daemonless.
   if ensure_image quay.io/skopeo/stable:latest && ensure_image alpine:latest; then
     work="$(mktemp -d)"; docker save alpine:latest -o "$work/img.tar" 2>/dev/null
     if docker run --rm --add-host "packages.${LAB_DOMAIN}:${HOST_IP}" \
@@ -250,12 +262,11 @@ else
   fi
 fi
 
-# --- 9. NTP (chrony @ HOST_IP:123) ------------------------------------------
 # Send a real SNTP client query and assert a server-mode reply with a sane stratum. Our
 # chrony serves the host clock as `local stratum 10`, so it answers even with no upstream.
 section "NTP (chrony @ ${HOST_IP}:123)"
 if have python3; then
-  ntp_out="$(python3 - "$HOST_IP" 2>/dev/null <<'PY'
+  if ntp_out="$(python3 - "$HOST_IP" 2>/dev/null <<'PY'
 import socket, struct, sys, time
 host = sys.argv[1]
 pkt = b'\x23' + 47 * b'\x00'              # LI=0 VN=4 Mode=3 (client)
@@ -271,8 +282,7 @@ txsec = struct.unpack('!I', data[40:44])[0] - 2208988800   # NTP epoch -> Unix
 print(f"mode={mode} stratum={stratum} skew={abs(txsec - int(time.time()))}s")
 sys.exit(0 if mode == 4 and 1 <= stratum <= 15 else 2)
 PY
-)"
-  if [[ $? -eq 0 ]]; then
+)"; then
     pass "NTP server answers a client query ($ntp_out)"
   else
     fail "NTP" "no valid NTP reply from ${HOST_IP}:123 (${ntp_out:-no output})"
@@ -281,8 +291,7 @@ else
   skip "NTP check" "python3 not installed"
 fi
 
-# --- 10. Homepage icons served locally (offline-safe) -----------------------
-# Every tile icon must come from Homepage itself (/icons/*), not a CDN, or the dashboard is
+# Every tile icon must serve from Homepage itself (/icons/*), not a CDN, or the dashboard is
 # blank on an air-gapped LAN. Assert each checked-in icon serves as 200 image/*.
 section "Homepage local icons (served by Homepage, not a CDN)"
 icondir="$SCRIPT_DIR/config/homepage/icons"
@@ -294,21 +303,26 @@ if [[ -d "$icondir" ]] && compgen -G "$icondir/*" >/dev/null; then
             "https://home.${LAB_DOMAIN}/icons/${base}" 2>/dev/null)"
     if [[ "$ct" == 200\ image/* ]]; then n_ok=$((n_ok+1)); else n_bad=$((n_bad+1)); echo "        miss: $base -> ${ct:-no response}"; fi
   done
-  [[ $n_bad -eq 0 ]] && pass "all $n_ok dashboard icons served locally (HTTP 200, image/*)" \
-    || fail "local icons" "$n_bad/$((n_ok+n_bad)) icons not served as image/* by Homepage"
+  if [[ $n_bad -eq 0 ]]; then
+    pass "all $n_ok dashboard icons served locally (HTTP 200, image/*)"
+  else
+    fail "local icons" "$n_bad/$((n_ok+n_bad)) icons not served as image/* by Homepage"
+  fi
 else
   skip "local icons" "config/homepage/icons is empty or missing"
 fi
 
-# --- 10b. Homepage "create" tile pinned above its sessions (static) ----------
-# In each Homepage group the control ("create") tile must sort ABOVE the dynamically-created
-# session tiles, or the button gets buried and jumps around as sessions come and go. Homepage
-# orders a group by weight ascending, so assert the control-tile weight
-# (compose/<x>-control.yaml) is strictly LESS than the session weight app.py stamps
-# (config/session-control/<x>.json -> homepage_weight). Pure static check; needs no live stack.
+# Homepage orders a group by ascending weight, so the control ("create") tile must have a
+# lower weight than the sessions or it sinks below them. This static check asserts the
+# control-tile weight (compose/<x>-control.yaml) is less than the session weight
+# (config/session-control/<x>.json -> homepage_weight). Needs no live stack.
 section "Homepage create-tile pinned above sessions"
+# hweight_yaml <file> -- first homepage.weight value in a compose file.
 hweight_yaml() { sed -nE 's/^[[:space:]]*homepage\.weight:[[:space:]]*"?([0-9]+)"?.*/\1/p' "$1" | head -1; }
+# hweight_json <file> -- first homepage_weight value in a session-control config.
 hweight_json() { sed -nE 's/.*"homepage_weight"[[:space:]]*:[[:space:]]*"?([0-9]+)"?.*/\1/p' "$1" | head -1; }
+# check_pin <label> <control-yaml> <session-json> -- pass if the control weight sorts above
+# (numerically below) the session weight.
 check_pin() {
   local label="$1" cw sw
   cw="$(hweight_yaml "$SCRIPT_DIR/$2")"; sw="$(hweight_json "$SCRIPT_DIR/$3")"
@@ -323,7 +337,6 @@ check_pin() {
 check_pin "terminals"  "compose/term-control.yaml" "config/session-control/terminal.json"
 check_pin "workspaces" "compose/code-control.yaml" "config/session-control/code.json"
 
-# --- 11. Forgejo Actions runner (container up + registered) -----------------
 section "Forgejo Actions runner"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx forgejo-runner; then
   if [[ -s "$SCRIPT_DIR/volumes/forgejo-runner/.runner" ]]; then
@@ -335,7 +348,6 @@ else
   skip "Forgejo runner" "forgejo-runner container not running"
 fi
 
-# --- 12. DHCP (opt-in; only checked when the profile is up) -----------------
 section "DHCP (dnsmasq -- opt-in)"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dhcp; then
   pass "DHCP container running (enabled via --profile dhcp)"
@@ -343,7 +355,6 @@ else
   skip "DHCP checks" "not enabled -- start with: docker compose --profile dhcp up -d"
 fi
 
-# --- 13. Sessions: code workspaces + terminals (live create/reach/delete) ---
 # Both control planes (code.lab, terminal.lab) run the same session-control app, so one
 # parameterized check covers both: control UI up, profiles API, name sanitization, and a
 # full create -> reach-through-Caddy -> delete lifecycle.
@@ -362,29 +373,41 @@ check_session_kind() {
   badcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X POST \
     -H 'Content-Type: application/json' --data '{"name":"BAD name; rm -rf /","profile":"base"}' \
     "https://${cc}/api/sessions" 2>/dev/null)"
-  [[ "$badcode" == 400 ]] && pass "${label}: rejects an invalid session name (HTTP 400)" \
-    || fail "${label}: name sanitization" "expected 400 for a bad name, got $badcode"
+  if [[ "$badcode" == 400 ]]; then
+    pass "${label}: rejects an invalid session name (HTTP 400)"
+  else
+    fail "${label}: name sanitization" "expected 400 for a bad name, got $badcode"
+  fi
   # Full lifecycle: create a throwaway session, reach it through Caddy, tear it down.
-  local sn="smoke-${STAMP}" shost="smoke-${STAMP}.${base}.${LAB_DOMAIN}" crcode scode dcode i
+  local sn="smoke-${STAMP}" shost="smoke-${STAMP}.${base}.${LAB_DOMAIN}" crcode scode dcode
   crcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X POST \
     -H 'Content-Type: application/json' --data "{\"name\":\"${sn}\",\"profile\":\"${prof}\"}" \
     "https://${cc}/api/sessions" 2>/dev/null)"
   if [[ "$crcode" == 200 ]]; then
     pass "${label}: created ${sn} (HTTP $crcode)"
     scode=000
-    for i in $(seq 1 20); do            # the session needs a moment to bind
+    for _ in $(seq 1 20); do            # the session needs a moment to bind
       scode="$(labcurl "$shost" -o /dev/null -w '%{http_code}' "https://${shost}${hpath}" 2>/dev/null || echo 000)"
       [[ "$scode" == 200 ]] && break
       sleep 1
     done
-    [[ "$scode" == 200 ]] && pass "${label}: session reachable through Caddy (${shost}${hpath} 200)" \
-      || fail "${label}: session reachability" "${shost}${hpath} never returned 200 (last: $scode)"
+    if [[ "$scode" == 200 ]]; then
+      pass "${label}: session reachable through Caddy (${shost}${hpath} 200)"
+    else
+      fail "${label}: session reachability" "${shost}${hpath} never returned 200 (last: $scode)"
+    fi
     dcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X DELETE "https://${cc}/api/sessions/${sn}" 2>/dev/null)"
-    [[ "$dcode" == 200 ]] && pass "${label}: deleted ${sn} (HTTP $dcode)" \
-      || fail "${label}: session delete" "expected 200, got $dcode"
+    if [[ "$dcode" == 200 ]]; then
+      pass "${label}: deleted ${sn} (HTTP $dcode)"
+    else
+      fail "${label}: session delete" "expected 200, got $dcode"
+    fi
     if have docker; then
-      [[ -z "$(docker ps -aq -f "name=^${prefix}-${sn}$" 2>/dev/null)" ]] \
-        && pass "${label}: session container removed" || fail "${label}: session cleanup" "${prefix}-${sn} still present"
+      if [[ -z "$(docker ps -aq -f "name=^${prefix}-${sn}$" 2>/dev/null)" ]]; then
+        pass "${label}: session container removed"
+      else
+        fail "${label}: session cleanup" "${prefix}-${sn} still present"
+      fi
     fi
   else
     labcurl "$cc" -o /dev/null -X DELETE "https://${cc}/api/sessions/${sn}" 2>/dev/null || true
@@ -398,8 +421,10 @@ check_session_kind "code" "code" "code" "base" "/healthz"
 section "Terminals (terminal.${LAB_DOMAIN})"
 check_session_kind "terminal" "term" "terminal" "base" "/"
 
-# --- summary ----------------------------------------------------------------
 printf '\n\033[1m── summary ──\033[0m\n'
 printf '  \033[1;32m%d passed\033[0m, \033[1;31m%d failed\033[0m, \033[1;33m%d skipped\033[0m\n' "$PASS" "$FAIL" "$SKIP"
-[[ "$FAIL" -eq 0 ]] && { printf '\n\033[1;32mAll checks passed.\033[0m\n'; exit 0; } \
-                    || { printf '\n\033[1;31m%d check(s) failed.\033[0m\n' "$FAIL"; exit 1; }
+if [[ "$FAIL" -eq 0 ]]; then
+  printf '\n\033[1;32mAll checks passed.\033[0m\n'; exit 0
+else
+  printf '\n\033[1;31m%d check(s) failed.\033[0m\n' "$FAIL"; exit 1
+fi

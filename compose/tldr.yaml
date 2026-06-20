@@ -1,12 +1,6 @@
-# tldr InBrowser.App -- offline tldr-pages reference, served fully offline (tldr.lab).
-# A static Vue PWA (https://github.com/InBrowserApp/tldr.inbrowser.app) whose build BAKES the
-# entire tldr-pages archive into the bundle, so the command examples load from THIS origin --
-# nothing is fetched at runtime. Built + staged into volumes/tldr by ./fetch-docs.sh during
-# the online provisioning window (the docs analog of `docker compose pull`). Stock nginx over
-# the static build; read-only, no state.
-#
-# Unlike the plain-HTML mirrors (cppreference, x86) this is a history-mode SPA, so it gets its
-# own nginx server config (config/nginx/tldr.conf) that falls deep links back to index.html.
+# tldr -- offline tldr-pages reference (tldr.lab). A static Vue PWA whose build bakes the whole
+# tldr-pages archive into the bundle; built + staged into volumes/tldr by ./fetch-docs.sh. nginx
+# over the static build with its own SPA config (config/nginx/tldr.conf). Read-only, no state.
 services:
   tldr:
     image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine

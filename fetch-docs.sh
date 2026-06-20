@@ -38,7 +38,8 @@ ensure_writable() {
         Fix:  sudo chown -R $(id -un):$(id -gn) ${1#"$SCRIPT_DIR/"}   (then re-run ./fetch-docs.sh)"
 }
 
-# --- cppreference (PeterFeicht html-book, the maintained offline archive) ----
+# fetch_cppreference -- download the latest PeterFeicht html-book archive (the maintained
+# offline cppreference mirror) and unpack it into volumes/cppreference.
 fetch_cppreference() {
   command -v curl >/dev/null || die "missing dependency: curl"
   command -v tar  >/dev/null || die "missing dependency: tar"
@@ -55,7 +56,7 @@ fetch_cppreference() {
   ok "cppreference -> volumes/cppreference  (start: reference/en/cpp.html)"
 }
 
-# --- x86 instruction reference (c9x.me/x86) ---------------------------------
+# fetch_x86 -- mirror the c9x.me/x86 instruction reference into volumes/x86.
 fetch_x86() {
   command -v wget >/dev/null || die "missing dependency: wget"
   local dir="$V/x86"; ensure_writable "$dir"
@@ -67,12 +68,9 @@ fetch_x86() {
   ok "x86 -> volumes/x86  (start: c9x.me/x86/index.html)"
 }
 
-# --- tldr.inbrowser.app (offline tldr-pages PWA) ----------------------------
-# Build the static site in a throwaway node container -- no host node/pnpm toolchain needed,
-# just docker (which the provisioning box already has for `compose pull`). The build's
-# `download:tldr-pages` step pulls the tldr-pages archive and BAKES it into the bundle, so
-# the finished site fetches nothing at runtime. node:20-alpine is build-time only; it never
-# runs on the air-gapped host, so it's not part of the prepull set.
+# fetch_tldr -- build the tldr.inbrowser.app static site into volumes/tldr. The build runs
+# in a throwaway node container (no host node/pnpm needed) and its download:tldr-pages step
+# bakes the tldr-pages archive into the bundle, so the finished site fetches nothing at runtime.
 fetch_tldr() {
   command -v docker >/dev/null || die "missing dependency: docker (tldr builds in a node container)"
   command -v git    >/dev/null || die "missing dependency: git"
@@ -82,11 +80,9 @@ fetch_tldr() {
   git clone --depth 1 https://github.com/InBrowserApp/tldr.inbrowser.app.git "$src" \
     || { warn "tldr: clone failed"; rm -rf "$src"; return 1; }
 
-  # Air-gap: the in-browser page loader races the bundled zip against a live
-  # raw.githubusercontent.com fetch whenever the browser reports online (it's aborted the
-  # instant the local zip wins, but it's still an outbound attempt). Force the zip-only
-  # branch so a cold load never reaches off-box. Best-effort: if upstream restructured the
-  # guard the build still works, just with the race left in.
+  # The page loader otherwise races the bundled zip against a live raw.githubusercontent.com
+  # fetch when the browser reports online. Force the zip-only branch so a cold load never
+  # reaches off-box. Best-effort: if upstream moved the guard, the build still works.
   local gp="$src/src/data/tldr-pages/page/getPage.ts"
   if [[ -f "$gp" ]] && grep -q 'isZipReady || !navigator.onLine' "$gp"; then
     sed -i 's#if (isZipReady || !navigator.onLine) {#if (true /* air-gap: always serve from the bundled zip */) {#' "$gp"
@@ -96,10 +92,8 @@ fetch_tldr() {
   fi
 
   log "tldr: building static site in node container (downloads tldr-pages archive + vite build)"
-  # Runs as root in-container; chowns the tree back to the invoking user at the end so the
-  # host-side cp/rm below don't trip over root-owned build output.
-  # pnpm 8 matches the repo's lockfileVersion 6.0 (corepack's default is newer and needs a
-  # newer Node than node:20-alpine ships). node 20 is fine for the vite 4 build.
+  # The container runs as root, so it chowns the tree back to the invoking user at the end
+  # for the host-side cp/rm below. pnpm 8 matches the repo's lockfileVersion 6.0.
   docker run --rm -e HOME=/tmp -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
       -v "$src:/app" -w /app node:20-alpine sh -lc "
         corepack enable &&
