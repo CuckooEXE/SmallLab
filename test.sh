@@ -300,6 +300,29 @@ else
   skip "local icons" "config/homepage/icons is empty or missing"
 fi
 
+# --- 10b. Homepage "create" tile pinned above its sessions (static) ----------
+# In each Homepage group the control ("create") tile must sort ABOVE the dynamically-created
+# session tiles, or the button gets buried and jumps around as sessions come and go. Homepage
+# orders a group by weight ascending, so assert the control-tile weight
+# (compose/<x>-control.yaml) is strictly LESS than the session weight app.py stamps
+# (config/session-control/<x>.json -> homepage_weight). Pure static check; needs no live stack.
+section "Homepage create-tile pinned above sessions"
+hweight_yaml() { sed -nE 's/^[[:space:]]*homepage\.weight:[[:space:]]*"?([0-9]+)"?.*/\1/p' "$1" | head -1; }
+hweight_json() { sed -nE 's/.*"homepage_weight"[[:space:]]*:[[:space:]]*"?([0-9]+)"?.*/\1/p' "$1" | head -1; }
+check_pin() {
+  local label="$1" cw sw
+  cw="$(hweight_yaml "$SCRIPT_DIR/$2")"; sw="$(hweight_json "$SCRIPT_DIR/$3")"
+  if [[ -z "$cw" || -z "$sw" ]]; then
+    fail "${label}: tile weights" "could not read weights (control='${cw:-?}' from $2, session='${sw:-?}' from $3)"
+  elif (( cw < sw )); then
+    pass "${label}: create tile pinned above sessions (control weight $cw < session weight $sw)"
+  else
+    fail "${label}: create tile ordering" "control weight $cw must be < session weight $sw, else the create button sinks below sessions"
+  fi
+}
+check_pin "terminals"  "compose/term-control.yaml" "config/session-control/terminal.json"
+check_pin "workspaces" "compose/code-control.yaml" "config/session-control/code.json"
+
 # --- 11. Forgejo Actions runner (container up + registered) -----------------
 section "Forgejo Actions runner"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx forgejo-runner; then

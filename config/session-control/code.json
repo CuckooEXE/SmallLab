@@ -8,6 +8,7 @@
   "homepage_group": "Workspaces",
   "homepage_icon": "/icons/code-server.svg",
   "homepage_description": "code-server workspace",
+  "homepage_weight": "100",
   "session": {
     "internal_port": 8080,
     "entrypoint": ["/usr/bin/entrypoint.sh"],

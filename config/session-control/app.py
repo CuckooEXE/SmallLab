@@ -269,6 +269,12 @@ def create_or_resume(name: str, profile: str) -> dict:
             "homepage.icon": CFG.get("homepage_icon", ""),
             "homepage.href": _url(name),
             "homepage.description": f"{CFG.get('homepage_description', 'session')} ({profile})",
+            # Sort every session tile BELOW the control ("create") tile. Homepage orders a
+            # group by weight ascending, so without this the unweighted session tiles default
+            # to 0 and shove the create button (term/code-control, weight 1) to the bottom --
+            # it then jumps around as sessions come and go. Keep this strictly above the
+            # control tile's weight in compose/{term,code}-control.yaml.
+            "homepage.weight": str(CFG.get("homepage_weight", 100)),
         },
         "HostConfig": {
             "Binds": [f"{HOST_DATA_DIR}/{name}/{sess['bind_subdir']}:{sess['mount_target']}"],

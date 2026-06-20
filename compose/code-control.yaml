@@ -41,4 +41,7 @@ services:
       homepage.icon: /icons/code-server.svg
       homepage.href: https://code.${LAB_DOMAIN}
       homepage.description: Spin up / tear down code-server sessions
-      homepage.weight: "10"
+      # Pin this "create" tile to the TOP of the Workspaces group. Homepage sorts a group by
+      # weight ascending, and session tiles are stamped weight 100 (code.json ->
+      # homepage_weight, applied by app.py), so this must stay well below that.
+      homepage.weight: "1"

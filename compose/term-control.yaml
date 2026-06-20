@@ -40,4 +40,7 @@ services:
       homepage.icon: /icons/terminal.svg
       homepage.href: https://terminal.${LAB_DOMAIN}
       homepage.description: Spin up / tear down browser terminals
-      homepage.weight: "20"
+      # Pin this "create" tile to the TOP of the Terminals group. Homepage sorts a group by
+      # weight ascending, and session tiles are stamped weight 100 (terminal.json ->
+      # homepage_weight, applied by app.py), so this must stay well below that.
+      homepage.weight: "1"

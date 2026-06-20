@@ -8,6 +8,7 @@
   "homepage_group": "Terminals",
   "homepage_icon": "/icons/terminal.svg",
   "homepage_description": "browser terminal (tmux)",
+  "homepage_weight": "100",
   "session": {
     "internal_port": 7681,
     "entrypoint": ["/usr/bin/tini", "--"],
