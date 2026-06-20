@@ -100,6 +100,12 @@ ukcode="$(labcurl "$uk" -L -o /dev/null -w '%{http_code}' "https://${uk}/" 2>/de
 get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}"  "/"
 # (Forgejo / packages.lab is checked in its own section below)
 
+# Dev tooling + offline references. The doc sites return 200 only once ./fetch-docs.sh has
+# staged their content into volumes/.
+get_code "Compiler Explorer godbolt.${LAB_DOMAIN}"  "godbolt.${LAB_DOMAIN}"     "/"
+get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"      "/"
+get_code "x86 ref         x86.${LAB_DOMAIN}"         "x86.${LAB_DOMAIN}"         "/"
+
 # --- 4. step-ca health ------------------------------------------------------
 section "step-ca (ACME CA)"
 body="$(curl -sS --max-time 15 --resolve "ca.${LAB_DOMAIN}:9000:${HOST_IP}" --cacert "$CA" "https://ca.${LAB_DOMAIN}:9000/health" 2>/dev/null)"
@@ -299,7 +305,19 @@ else
   skip "local icons" "config/homepage/icons is empty or missing"
 fi
 
-# --- 11. DHCP (opt-in; only checked when the profile is up) -----------------
+# --- 11. Forgejo Actions runner (container up + registered) -----------------
+section "Forgejo Actions runner"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx forgejo-runner; then
+  if [[ -s "$SCRIPT_DIR/volumes/forgejo-runner/.runner" ]]; then
+    pass "runner container up and registered (.runner present)"
+  else
+    fail "Forgejo runner" "container up but not registered yet -- run ./bootstrap.sh"
+  fi
+else
+  skip "Forgejo runner" "forgejo-runner container not running"
+fi
+
+# --- 12. DHCP (opt-in; only checked when the profile is up) -----------------
 section "DHCP (dnsmasq -- opt-in)"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dhcp; then
   pass "DHCP container running (enabled via --profile dhcp)"

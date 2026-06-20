@@ -23,6 +23,7 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **NTP**        | `ntp.lab` (= `HOST_IP`)                          | `123/udp`                    | [chrony](https://chrony-project.org/) time source; serves the host clock to the LAN so TLS / TOTP / SMB don't break on client drift |
 | **DHCP** *(opt-in)* | serves the LAN — `--profile dhcp`          | `67/udp` (host net)          | [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) in DHCP-only mode; hands clients lab DNS + NTP + domain. **Off by default** |
 | **Forgejo**    | `https://packages.lab`                          | via Caddy                    | [Forgejo](https://forgejo.org) Git forge + universal package registry — Docker/OCI, npm, PyPI, Maven, Cargo, … ; one host serves UI, REST API **and** `/v2/` |
+| **Forgejo Runner** | registers to Forgejo (internal)             | — (drives Docker socket)     | [Forgejo Actions](https://forgejo.org/docs/latest/admin/actions/) CI runner; runs workflows as containers. Auto-registered by `bootstrap.sh` |
 | **MinIO**      | `https://s3.lab` (API), `https://s3-console.lab`| via Caddy                    | S3-compatible object storage + console |
 | **Samba**      | `\\files.lab\lab`                               | `445/tcp`, `139/tcp`         | SMB share, **passwordless guest access** (no auth) |
 | **Filebrowser**| `https://files.lab`                             | via Caddy                    | web face for the same share, **no login** (noauth) |
@@ -35,6 +36,9 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **Vaultwarden**| `https://vault.lab`                             | via Caddy                    | Bitwarden-compatible secrets vault |
 | **Dozzle**     | `https://logs.lab`                              | via Caddy                    | live Docker log viewer for this stack |
 | **Uptime Kuma**| `https://status.lab`                            | via Caddy                    | uptime / status + TLS-expiry monitoring |
+| **Compiler Explorer** | `https://godbolt.lab`                    | via Caddy                    | [Compiler Explorer](https://github.com/compiler-explorer/compiler-explorer) (Godbolt) — interactive source→asm |
+| **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
+| **x86 ref**    | `https://x86.lab`                               | via Caddy                    | offline x86/x64 instruction reference (mirror of [c9x.me/x86](https://c9x.me/x86/)) |
 
 Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only, so they
 don't collide with `systemd-resolved` on `127.0.0.53` or a host smbd. Caddy binds `0.0.0.0`.
@@ -70,20 +74,28 @@ state under `volumes/<service>/`, so all stateful data is one git-ignored tree.
 ```bash
 # 1. secrets / host IP
 cp .env.example .env
-$EDITOR .env          # set HOST_IP to this box, change the change-me passwords
+$EDITOR .env          # set HOST_IP to this box, change the change-me passwords, AND set
+                      # DOCKER_GID (getent group docker | cut -d: -f3)
 
 # 2. on a FRESH host, create the runtime dirs (bind mounts, git-ignored). Most
-#    services run as root; three don't: own those to match before first `up`.
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma}
-sudo chown 1000:1000  volumes/stepca     # step-ca runs as uid 1000
-sudo chown 1000:1000  volumes/forgejo    # forgejo runs as uid 1000 (git)
-sudo chown 100:101    volumes/share      # samba/webdav write as uid 100 (smbuser)
-sudo chown 65534:82   volumes/privatebin # privatebin's php-fpm runs as uid 65534, gid 82
+#    services run as root; a few don't: own those to match before first `up`.
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma,cppreference,x86}
+sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
+sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
+sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
+sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
+sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
+# (the doc dirs are served read-only by nginx.)
+
+# 2b. stage offline docs content (cppreference + x86). Needs internet -- run it in the
+#     ONLINE provisioning window, like `docker compose pull`.
+./fetch-docs.sh
 
 # 3. bring it up  (run from this dir; it finds compose.yaml + .env automatically)
 docker compose up -d
 
 # 4. configure DNS + export the root CA + kick Caddy to issue certs + set up Forgejo
+#    (also registers the Forgejo Actions runner)
 ./bootstrap.sh
 ```
 
@@ -259,6 +271,69 @@ The per-format endpoints (npm, Maven, Cargo, …) are documented at
 > **Anonymous access:** download/pull works because the org is **public**. Uploads always
 > authenticate. Change the admin password in the UI afterward and mirror it in `.env` so a
 > re-run of `bootstrap.sh` keeps working.
+
+## Forgejo Actions (CI)
+
+`compose/forgejo-runner.yaml` adds an Actions runner — the CI half of the forge. It registers
+to Forgejo over the internal network and executes workflows, running each job as a **sibling
+container on the `caddy` network** (so jobs reach `http://forgejo:3000` for checkout and
+package pulls without leaving the host). `bootstrap.sh` registers it automatically with
+Forgejo's **shared-secret** flow (no token round-trip): a 40-hex secret in
+`volumes/forgejo-runner/secret` is the runner's identity, registered idempotently on both
+sides. Re-running bootstrap is safe.
+
+A minimal workflow (`.forgejo/workflows/ci.yml` in a repo):
+
+```yaml
+on: [push]
+jobs:
+  build:
+    runs-on: docker          # -> the `docker` label -> runs in node:22-bookworm
+    steps:
+      - run: echo "built on $(uname -a)"
+```
+
+**Air-gapped caveats** — workflows need *content* that isn't on the box by default:
+
+- **`runs-on:` images must exist locally.** `runs-on: docker` runs the job in
+  `node:22-bookworm` (set in `config/forgejo-runner/config.yaml`). Offline, `docker pull` it
+  once on the dev box, push it into Forgejo's registry, and pre-pull it on the host — the
+  runner is set `force_pull: false` and won't fetch it. `runs-on: host` runs a job directly on
+  the runner with no image.
+- **Reusable actions** (`uses: actions/checkout@v4`) resolve from **this forge**
+  (`FORGEJO__actions__DEFAULT_ACTIONS_URL=self`), not the internet. Mirror the action repos
+  into a Forgejo org (e.g. push to `packages.lab/actions/checkout`), or skip `uses:` and clone
+  with a plain `run:` git step.
+- **Labels / capacity** live in `config/forgejo-runner/config.yaml`; edit then
+  `docker compose restart forgejo-runner`.
+
+> **Trust:** the runner drives the host Docker socket, so a workflow author can reach root on
+> the host — the same posture as Dozzle/Homepage (which already mount the socket) on this
+> LAN-only stack. For stronger isolation, switch to a docker-in-docker runner (see Playbook).
+
+## Compiler Explorer
+
+[Compiler Explorer](https://godbolt.lab) (Godbolt) shows how source lowers to assembly across
+compilers and flags. The image bundles a set of C/C++ compilers. **Air-gapped:** CE's "fetch
+more compilers" pulls toolchains from the internet, so offline you get what's in the image. To
+add your own (a vendor cross-compiler, a specific gcc/clang), mount the toolchain into the
+container and extend CE's compiler config — see
+[Adding a compiler](https://github.com/compiler-explorer/compiler-explorer/blob/main/docs/AddingACompiler.md).
+
+## Offline programming references
+
+Two static-HTML reference sites, each its own dashboard tile, served by a tiny nginx over a
+git-ignored `volumes/<name>` tree. Content is **not** fetched at runtime — `./fetch-docs.sh`
+stages it during the online provisioning window (the docs analog of `docker compose pull`),
+then the populated dirs travel to the air-gapped host:
+
+| Tile | URL | Source | Stage with |
+|------|-----|--------|------------|
+| cppreference | `https://cppref.lab` | PeterFeicht html-book archive | `./fetch-docs.sh cppreference` |
+| x86 ref | `https://x86.lab` | mirror of `c9x.me/x86/` | `./fetch-docs.sh x86` |
+
+`fetch-docs.sh` drops a small redirect `index.html` at each volume root so the bare URL lands
+on the right page.
 
 ## Using object storage (MinIO)
 

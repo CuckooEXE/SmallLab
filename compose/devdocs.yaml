@@ -12,7 +12,7 @@ services:
     labels:
       caddy: devdocs.${LAB_DOMAIN}
       caddy.reverse_proxy: "{{upstreams 9292}}"
-      homepage.group: Tools
+      homepage.group: Reference
       homepage.name: DevDocs
       homepage.icon: /icons/devdocs.svg
       homepage.href: https://devdocs.${LAB_DOMAIN}

@@ -19,6 +19,7 @@ include:
   - compose/ntp.yaml
   - compose/dhcp.yaml   # opt-in: only starts under `--profile dhcp` (see compose/dhcp.yaml)
   - compose/forgejo.yaml
+  - compose/forgejo-runner.yaml   # Forgejo Actions CI runner (registers in bootstrap.sh)
   - compose/minio.yaml
   - compose/samba.yaml
   - compose/filebrowser.yaml
@@ -31,6 +32,10 @@ include:
   - compose/vaultwarden.yaml
   - compose/dozzle.yaml
   - compose/uptime-kuma.yaml
+  - compose/compiler-explorer.yaml # Godbolt -- source to asm
+  # Offline programming references (static HTML; content staged by ./fetch-docs.sh):
+  - compose/cppreference.yaml
+  - compose/x86.yaml
 
 networks:
   # Ingress: Caddy and every container it reverse-proxies.

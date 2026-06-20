@@ -1,0 +1,32 @@
+# Forgejo Actions runner config (checked in, mounted read-only at /data/config.yaml).
+# The registration result (.runner) is created next to it by bootstrap.sh via the
+# shared-secret flow -- see compose/forgejo-runner.yaml. Regenerate the full example with:
+#   docker run --rm data.forgejo.org/forgejo/runner:9.1.1 forgejo-runner generate-config
+log:
+  level: info
+
+runner:
+  file: /data/.runner
+  capacity: 2          # how many jobs run at once
+  timeout: 1h
+  fetch_timeout: 5s
+  # A LABEL maps a workflow's `runs-on:` to HOW the job runs:
+  #   <label>:docker://<image>  -> run the job inside <image> (must exist locally, air-gapped)
+  #   <label>:host              -> run directly on the runner host (no container)
+  labels:
+    - "docker:docker://node:22-bookworm"
+    - "host:host"
+
+cache:
+  enabled: true        # gives workflows ACTIONS_CACHE_URL (actions/cache)
+
+container:
+  # Run each job as a sibling container ON the lab `caddy` network, so jobs reach the forge
+  # at http://forgejo:3000 for actions/checkout and package pulls without leaving the host.
+  network: caddy
+  # Never reach out to a registry for a missing job image -- fail instead (air-gapped). The
+  # image must already be on the host docker daemon (pre-pull / mirror into Forgejo's registry).
+  force_pull: false
+  # LAN-trusted: let workflows bind-mount host paths if an action needs to.
+  valid_volumes:
+    - '**'

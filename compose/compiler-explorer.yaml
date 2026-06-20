@@ -1,0 +1,23 @@
+# Compiler Explorer (Godbolt) -- interactive "source -> asm" explorer (godbolt.lab). See how
+# code lowers across compilers and flags. This image bundles a set of C/C++ compilers.
+#
+# !! AIR-GAP: Compiler Explorer's "fetch more compilers" feature pulls toolchains from the
+# internet, so on an offline host you get exactly what's baked into the image. To add your
+# own (a vendor cross-compiler, a specific gcc/clang), mount it in and extend CE's config --
+# see README "Compiler Explorer". The UI itself runs fully offline.
+services:
+  compiler-explorer:
+    image: madduci/docker-compiler-explorer@sha256:9346a59e8ab1b497fe6f5d1a556fe03f8d0e847c44bcddc6c24b9076b5a7dc63  # :latest pinned 2026-06
+    container_name: compiler-explorer
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: godbolt.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 10240}}"
+      homepage.group: Tools
+      homepage.name: Compiler Explorer
+      homepage.icon: /icons/compiler-explorer.svg
+      homepage.href: https://godbolt.${LAB_DOMAIN}
+      homepage.description: Godbolt -- source to asm
+      homepage.weight: "35"

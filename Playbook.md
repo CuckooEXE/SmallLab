@@ -26,6 +26,7 @@ is **`/opt/lab`**.
 5. [Add DNS entries (Technitium web UI)](#5-add-dns-entries-technitium-web-ui)
 6. [Smoke-test and health](#6-smoke-test-and-health)
 7. [Enable DHCP (make the host the LAN's DHCP authority)](#7-enable-dhcp-make-the-host-the-lans-dhcp-authority)
+8. [CI runner & offline docs](#8-ci-runner--offline-docs)
 
 ---
 
@@ -61,19 +62,24 @@ cd /opt/lab
 # --- secrets + host IP (.env is git-ignored; create from the template) ---
 cp .env.example .env
 $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, set the
-                                          # change-me passwords, keep LAB_DOMAIN=lab
+                                          # change-me passwords, keep LAB_DOMAIN=lab, and set
+                                          # DOCKER_GID (getent group docker | cut -d: -f3;
+                                          # the Forgejo runner needs it)
 
-# --- runtime dirs (bind mounts; git-ignored). Four need specific ownership. ---
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma}
-sudo chown 1000:1000  volumes/stepca       # step-ca runs as uid 1000
-sudo chown 1000:1000  volumes/forgejo      # forgejo runs as uid 1000 (git)
-sudo chown 100:101    volumes/share        # samba/webdav write as uid 100 (smbuser)
-sudo chown 65534:82   volumes/privatebin   # privatebin's php-fpm runs as uid 65534, gid 82
+# --- runtime dirs (bind mounts; git-ignored). A few need specific ownership. ---
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma,cppreference,x86}
+sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
+sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
+sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
+sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
+sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
+# (the doc dirs are served read-only by nginx.)
 
-# --- pull every image up front so `up` is quick ---
+# --- pull every image + stage offline docs up front (ONLINE window; air-gap prep) ---
 docker compose pull
+./fetch-docs.sh                           # stage cppreference + x86 content
 
-# --- bring it up and wire DNS + CA + Forgejo ---
+# --- bring it up and wire DNS + CA + Forgejo (+ register the Actions runner) ---
 docker compose up -d
 ./bootstrap.sh
 ```
@@ -433,3 +439,49 @@ docker compose --profile dhcp down dhcp     # or: docker compose rm -sf dhcp
 > A plain `docker compose up -d` (no `--profile dhcp`) never starts DHCP and never stops a
 > running one — the profile gate keeps it out of the default lifecycle. Always include
 > `--profile dhcp` in commands meant to manage it.
+
+---
+
+## 8. CI runner & offline docs
+
+Day-two notes for the developer-tooling services layered on top of the core stack. Setup and
+the air-gap details live in the [README](README.md); these are the "how do I…" one-liners. None
+of these open new host ports — they all go through Caddy (`80`/`443`) or stay internal, so the
+§1a firewall list is unchanged.
+
+### Forgejo Actions runner
+
+`bootstrap.sh` registers it automatically (shared-secret flow). To inspect or redo it:
+
+```bash
+docker compose logs --tail=20 forgejo-runner   # "waiting for registration" = not bootstrapped;
+                                               # once registered the daemon logs a successful poll
+./bootstrap.sh                                 # idempotent: registers if needed, else no-ops
+# the forge lists its runners in the UI:  https://packages.lab/-/admin/actions/runners
+
+# force a clean re-register (fresh identity). The secret/.runner live in the data volume and
+# are owned by uid 1000, so wipe them from inside the container, not with host rm:
+docker compose exec -T forgejo-runner sh -c 'rm -f /data/secret /data/.runner'
+docker compose restart forgejo-runner && ./bootstrap.sh
+```
+
+Job labels / capacity are in `config/forgejo-runner/config.yaml`; edit then
+`docker compose restart forgejo-runner`. Air-gap rules still apply: `runs-on:` images must be
+pre-pulled and `uses:` actions mirrored into the forge (README → "Forgejo Actions (CI)").
+
+**Stronger isolation (docker-in-docker).** The runner shares the host Docker socket by default.
+To sandbox CI instead, run a `docker:dind` sidecar and point the runner at it
+(`DOCKER_HOST=tcp://docker-in-docker:2375`, drop the socket mount) — the upstream layout is in
+the [Forgejo runner docs](https://forgejo.org/docs/latest/admin/actions/runner-installation/).
+
+### Offline docs (re-staging)
+
+Content lives in `volumes/{cppreference,x86}`, served read-only. Refresh it from a box with
+internet, then carry the dirs over:
+
+```bash
+./fetch-docs.sh                 # both of them
+./fetch-docs.sh cppreference    # just one target
+# if staged on another machine, rsync the dir(s) into the host's volumes/, then:
+docker compose restart cppreference x86
+```

@@ -54,6 +54,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
 need curl
 need jq
 need docker
+need openssl
 
 # percent-encode a value (passwords may contain reserved chars)
 urlenc() { jq -rn --arg s "$1" '$s|@uri'; }
@@ -289,6 +290,71 @@ setup_forgejo() {
 log "configuring Forgejo (admin user + packages org)"
 setup_forgejo \
   || warn "Forgejo auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
+
+# --- 10. Forgejo Actions runner: register via the shared-secret flow ---------
+# Air-gapped registration with no token round-trip: a 40-hex secret is the shared identity.
+# ALL runner-volume reads/writes go through `docker compose exec` (i.e. as the container's
+# own uid 1000), so they work regardless of who owns volumes/forgejo-runner on the host --
+# the host user that runs bootstrap is NOT uid 1000 and can't write into that dir directly.
+# Idempotent + soft-failing: if the runner is already registered we stop; otherwise the
+# secret is generated once, persisted in the data volume, and reused on every re-run (a fresh
+# secret would register a *second* runner, since the secret's first 16 hex are its identity).
+setup_forgejo_runner() {
+  local name="lab-runner"
+
+  # already registered? (.runner lives in the runner's data volume, written by the container)
+  if docker compose exec -T forgejo-runner test -s /data/.runner 2>/dev/null; then
+    ok "runner already registered (/data/.runner present)"; return 0
+  fi
+
+  # 1. shared secret: reuse the persisted one, else generate on the host (openssl) and persist
+  #    it INTO the data volume via the container (umask 077 -> mode 600, owned by uid 1000).
+  # `|| true` INSIDE the container: a missing /data/secret (the normal first-run case) must
+  # read as "empty", not as a failure -- otherwise pipefail would propagate cat's non-zero and
+  # we'd bail before generating one. A genuinely-down container makes `exec` itself fail, which
+  # the inner `|| true` can't mask, so the outer `||` still catches that case correctly.
+  local secret
+  secret="$(docker compose exec -T forgejo-runner sh -c 'cat /data/secret 2>/dev/null || true' | tr -d '\r\n')" \
+    || { warn "could not reach the forgejo-runner container (down or crash-looping). Check:
+        docker compose ps forgejo-runner ; docker compose logs --tail=40 forgejo-runner
+   If it loops on a stale registration, clear it and bring it up clean, then re-run bootstrap:
+        sudo rm -f volumes/forgejo-runner/.runner volumes/forgejo-runner/secret
+        docker compose up -d forgejo-runner"; return 1; }
+  if [[ ! "$secret" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    secret="$(openssl rand -hex 20)"
+    if printf '%s' "$secret" | docker compose exec -T forgejo-runner sh -c 'umask 077; cat > /data/secret' 2>/dev/null; then
+      ok "generated runner secret -> volumes/forgejo-runner/secret"
+    else
+      warn "could not write /data/secret in the runner container. volumes/forgejo-runner must be
+        owned by uid 1000 (the runner's user) -- Docker creates it as root if it's missing at
+        first 'up'. Fix on the host, then re-run bootstrap:
+        sudo chown -R 1000:1000 volumes/forgejo-runner"; return 1
+    fi
+  fi
+
+  # 2. register on the forge (idempotent global runner). The shared LAB posture already passes
+  #    secrets on the exec argv (see the admin-create above), so --secret is fine here.
+  log "registering Forgejo runner '$name' on the forge"
+  if docker compose exec -T --user git forgejo \
+       forgejo forgejo-cli actions register --name "$name" --secret "$secret" >/dev/null 2>&1; then
+    ok "runner registered on the forge"
+  else
+    warn "could not register the runner (is forgejo up?) -- re-run ./bootstrap.sh"; return 1
+  fi
+
+  # 3. write the runner file on the runner side (creates /data/.runner as uid 1000).
+  log "creating the runner registration file"
+  if docker compose exec -T forgejo-runner \
+       forgejo-runner create-runner-file --instance http://forgejo:3000 \
+         --secret "$secret" --name "$name" --config /data/config.yaml >/dev/null 2>&1; then
+    ok "runner file created -- the daemon will pick up jobs shortly"
+  else
+    warn "could not create the runner file (is the forgejo-runner container up?) -- re-run ./bootstrap.sh"; return 1
+  fi
+}
+log "configuring the Forgejo Actions runner"
+setup_forgejo_runner \
+  || warn "Forgejo runner setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
 # --- next steps -------------------------------------------------------------
 cat <<EOF

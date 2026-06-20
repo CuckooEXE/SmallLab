@@ -5,12 +5,18 @@ headerStyle: clean
 hideVersion: true
 
 layout:
+  Links:
+    style: row
+    columns: 4
   Infrastructure:
     style: row
     columns: 4
   Tools:
     style: row
     columns: 2
+  Reference:
+    style: row
+    columns: 4
   Storage & Packages:
     style: row
     columns: 4

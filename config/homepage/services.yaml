@@ -1,5 +1,19 @@
-# Services are discovered from `homepage.*` container labels, so this list stays empty.
-# Keep the file: if it's missing, Homepage regenerates it with live example tiles. The
-# empty [] suppresses them. Add manual (non-container) entries here if you ever need
-# them -- they merge with the auto-discovered ones.
-[]
+# Container services are discovered from `homepage.*` labels; this file holds MANUAL
+# (non-container) tiles, which merge with the auto-discovered ones. Keep the file present:
+# if it's missing, Homepage regenerates it with live demo tiles. To show none, set this back
+# to `[]` rather than deleting the file.
+#
+# External links as their own "Links" group (pinned to the top via settings.yaml `layout`).
+# Icons are served LOCALLY (/icons/*.svg), not from a CDN, so they render on the air-gapped
+# LAN -- the same rule every other tile follows.
+- Links:
+    - Google:
+        href: https://google.com
+        description: Search
+        icon: /icons/google.svg
+        target: _blank
+    - Yahoo:
+        href: https://yahoo.com
+        description: Web portal
+        icon: /icons/yahoo.svg
+        target: _blank

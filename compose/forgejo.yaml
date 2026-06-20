@@ -25,6 +25,11 @@ services:
       - FORGEJO__service__DISABLE_REGISTRATION=true   # admin creates users; no self-signup
       - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false    # anonymous viewing -> anonymous package pull
       - FORGEJO__packages__ENABLED=true
+      - FORGEJO__actions__ENABLED=true                 # CI: paired with compose/forgejo-runner.yaml
+      # Air-gapped: resolve `uses: actions/checkout@v4` against THIS forge instead of the
+      # internet (default is code.forgejo.org). Mirror the action repos locally, or write
+      # workflows with plain `run:` steps. See README "Forgejo Actions (CI)".
+      - FORGEJO__actions__DEFAULT_ACTIONS_URL=self
     volumes:
       - ../volumes/forgejo:/data
     networks:
