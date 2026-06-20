@@ -17,7 +17,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 8080}}"
       homepage.group: Tools
       homepage.name: PrivateBin
-      homepage.icon: privatebin.png
+      homepage.icon: /icons/privatebin.png
       homepage.href: https://paste.${LAB_DOMAIN}
       homepage.description: Encrypted pastebin
       homepage.weight: "50"

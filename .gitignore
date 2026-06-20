@@ -15,6 +15,10 @@ config/homepage/*
 !config/homepage/services.yaml
 !config/homepage/widgets.yaml
 !config/homepage/bookmarks.yaml
+# Locally-served dashboard icons (mounted read-only into Homepage at /app/public/icons).
+# Checked in so the dashboard renders on an air-gapped LAN -- Homepage's default `name.png`
+# icons are fetched from a CDN, which fails offline.
+!config/homepage/icons/
 
 # Backups live on the dedicated backup server, never in the repo. Ignore any
 # filled-in local config that lands in the working tree (the tracked template is

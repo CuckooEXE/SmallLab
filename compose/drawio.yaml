@@ -14,7 +14,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 8080}}"
       homepage.group: Tools
       homepage.name: drawio
-      homepage.icon: drawio.png
+      homepage.icon: /icons/drawio.png
       homepage.href: https://draw.${LAB_DOMAIN}
       homepage.description: Offline diagram editor
       homepage.weight: "40"

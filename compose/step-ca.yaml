@@ -32,7 +32,7 @@ services:
     labels:
       homepage.group: Infrastructure
       homepage.name: step-ca
-      homepage.icon: smallstep.png
+      homepage.icon: /icons/smallstep.png
       homepage.href: https://ca.${LAB_DOMAIN}:9000/health
       homepage.description: Internal ACME certificate authority
       homepage.weight: "40"

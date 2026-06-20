@@ -14,7 +14,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 9292}}"
       homepage.group: Tools
       homepage.name: DevDocs
-      homepage.icon: devdocs.png
+      homepage.icon: /icons/devdocs.svg
       homepage.href: https://devdocs.${LAB_DOMAIN}
       homepage.description: Offline API documentation
       homepage.weight: "30"

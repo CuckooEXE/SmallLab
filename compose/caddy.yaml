@@ -28,7 +28,7 @@ services:
       # Homepage discovers this container from these labels (see config/homepage/docker.yaml)
       homepage.group: Infrastructure
       homepage.name: Caddy
-      homepage.icon: caddy.png
+      homepage.icon: /icons/caddy.png
       homepage.href: https://home.${LAB_DOMAIN}
       homepage.description: TLS reverse proxy
       homepage.weight: "10"

@@ -17,7 +17,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 8080}}"
       homepage.group: Infrastructure
       homepage.name: Dozzle
-      homepage.icon: dozzle.png
+      homepage.icon: /icons/dozzle.png
       homepage.href: https://logs.${LAB_DOMAIN}
       homepage.description: Live container logs
       homepage.weight: "60"

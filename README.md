@@ -20,6 +20,8 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **step-ca**    | `https://ca.lab:9000`                           | `9000`                       | [Smallstep](https://smallstep.com/docs/step-ca/) internal ACME CA — the one root every client trusts |
 | **Homepage**   | `https://home.lab`                              | via Caddy                    | dashboard; auto-discovers services from container labels |
 | **Technitium** | `https://dns.lab` (console)                     | `53/udp`, `53/tcp`, `127.0.0.1:5380` | [DNS server](https://technitium.com/dns/), authoritative for `*.lab`, forwards the rest |
+| **NTP**        | `ntp.lab` (= `HOST_IP`)                          | `123/udp`                    | [chrony](https://chrony-project.org/) time source; serves the host clock to the LAN so TLS / TOTP / SMB don't break on client drift |
+| **DHCP** *(opt-in)* | serves the LAN — `--profile dhcp`          | `67/udp` (host net)          | [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) in DHCP-only mode; hands clients lab DNS + NTP + domain. **Off by default** |
 | **Forgejo**    | `https://packages.lab`                          | via Caddy                    | [Forgejo](https://forgejo.org) Git forge + universal package registry — Docker/OCI, npm, PyPI, Maven, Cargo, … ; one host serves UI, REST API **and** `/v2/` |
 | **MinIO**      | `https://s3.lab` (API), `https://s3-console.lab`| via Caddy                    | S3-compatible object storage + console |
 | **Samba**      | `\\files.lab\lab`                               | `445/tcp`, `139/tcp`         | SMB share, **passwordless guest access** (no auth) |
@@ -34,8 +36,11 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **Dozzle**     | `https://logs.lab`                              | via Caddy                    | live Docker log viewer for this stack |
 | **Uptime Kuma**| `https://status.lab`                            | via Caddy                    | uptime / status + TLS-expiry monitoring |
 
-Host-bound ports (`53`, `445`, `139`, `9000`) bind to `${HOST_IP}` only, so they don't
-collide with `systemd-resolved` on `127.0.0.53` or a host smbd. Caddy binds `0.0.0.0`.
+Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only, so they
+don't collide with `systemd-resolved` on `127.0.0.53` or a host smbd. Caddy binds `0.0.0.0`.
+The opt-in **DHCP** service is the one exception: DHCP DISCOVER is an L2 broadcast a
+bridged container never sees, so dnsmasq uses **host networking** (bound to one NIC) and
+only starts under `--profile dhcp` — see [Zero-config clients](#zero-config-clients-dhcp).
 
 ## Repository layout
 
@@ -156,6 +161,49 @@ per-domain routing. You need a resolver that understands per-domain rules.)
   ```
   Push fleet-wide via Group Policy: *Computer Config → Policies → Windows Settings → Name
   Resolution Policy*.
+
+## Time (NTP)
+
+An air-gapped LAN has no public NTP to reach, and clock drift quietly breaks the rest of
+the stack: step-ca rejects certs outside their validity window, Vaultwarden TOTP falls
+outside its ±30s window, and SMB/Kerberos auth fails past its skew tolerance. The **NTP**
+service (chrony) closes that gap — it serves the docker host's clock to the LAN as a
+*local stratum*, so it answers clients **even with no upstream reachable**. It comes up
+with the stack; point clients at `HOST_IP` (or let DHCP do it):
+
+```bash
+# Linux (chrony):  echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sudo systemctl restart chrony
+# Linux (systemd-timesyncd):  sudo sh -c 'echo -e "[Time]\nNTP=192.168.1.171" > /etc/systemd/timesyncd.conf.d/lab.conf' && sudo systemctl restart systemd-timesyncd
+# one-shot check from any client:
+chronyc -h 192.168.1.171 tracking     # or: ntpdate -q 192.168.1.171
+```
+
+`NTP_SERVERS` in `.env` lists upstreams used to discipline the host's *own* clock when it
+happens to have internet; offline they're ignored and the host clock (RTC) is the
+reference. The container never steps the host clock — keep the host's time correct and the
+whole LAN inherits it.
+
+## Zero-config clients (DHCP)
+
+Every client needs the same two things — resolve `*.lab` (DNS → `HOST_IP`) and sync time
+(NTP → `HOST_IP`). The opt-in **DHCP** service hands both out automatically (DHCP options
+6 and 42, plus the `lab` domain), so a machine that just joins the LAN is configured with
+no per-client steps. It's **off by default** and ships disabled behind a compose profile:
+
+```bash
+# 1. set the DHCP_* block in .env (LAN NIC, address range, gateway, lease) to match the LAN
+# 2. start it alongside the running stack:
+docker compose --profile dhcp up -d        # brings up the `dhcp` container; leaves others alone
+docker compose --profile dhcp down dhcp    # stop just DHCP (or: docker compose rm -sf dhcp)
+```
+
+> **One DHCP server per broadcast domain.** Only run this if **this host is the LAN's sole
+> DHCP authority** — two servers on one segment fight. If a router already does DHCP, leave
+> this off and instead set the router's DNS (option 6) and NTP (option 42) to `HOST_IP`:
+> same result, no second server. dnsmasq here runs DHCP-only (`--port=0`), so it never
+> competes with Technitium for DNS.
+
+Clients still need to **trust the root CA** (DHCP can't push that) — see below.
 
 ## How TLS works (step-ca)
 
@@ -312,6 +360,15 @@ with *live* demo entries, so `services.yaml` and `bookmarks.yaml` are committed 
 `[]` to suppress them, and `docker.yaml` is mandatory (its generated default is commented
 out → discovery silently no-ops). Everything else under `config/homepage/` is regenerated
 and gitignored via a whitelist.
+
+**Icons are served locally**, not from a CDN. Homepage's default `icon: technitium.png`
+form fetches from a public icon CDN — which fails on an air-gapped LAN, leaving every tile
+broken. So each tile's icon is checked into `config/homepage/icons/` (mounted read-only at
+`/app/public/icons`) and referenced as `icon: /icons/<name>`. Most are the upstream app
+logos (PNG); the three utility services with no logo (DevDocs, NTP, DHCP) use a tinted
+[Material Design](https://pictogrammers.com/library/mdi/) glyph (SVG). To add an icon for a
+new service, drop the file in `config/homepage/icons/` and set `homepage.icon: /icons/<file>`
+on the container; restart Homepage to pick up new files.
 
 ## Common tasks
 

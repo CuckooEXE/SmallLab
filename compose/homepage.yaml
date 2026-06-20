@@ -8,6 +8,7 @@ services:
       - HOMEPAGE_ALLOWED_HOSTS=home.${LAB_DOMAIN}
     volumes:
       - ../config/homepage:/app/config
+      - ../config/homepage/icons:/app/public/icons:ro  # local icons -> served at /icons/* (offline)
       - /var/run/docker.sock:/var/run/docker.sock:ro   # live container status
     networks:
       - caddy
@@ -16,7 +17,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 3000}}"
       homepage.group: Infrastructure
       homepage.name: Homepage
-      homepage.icon: homepage.png
+      homepage.icon: /icons/homepage.png
       homepage.href: https://home.${LAB_DOMAIN}
       homepage.description: This dashboard
       homepage.weight: "30"

@@ -11,7 +11,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 8000}}"
       homepage.group: Tools
       homepage.name: CyberChef
-      homepage.icon: cyberchef.png
+      homepage.icon: /icons/cyberchef.png
       homepage.href: https://cyberchef.${LAB_DOMAIN}
       homepage.description: The cyber swiss army knife
       homepage.weight: "10"

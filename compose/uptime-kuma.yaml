@@ -21,7 +21,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 3001}}"
       homepage.group: Infrastructure
       homepage.name: Uptime Kuma
-      homepage.icon: uptime-kuma.png
+      homepage.icon: /icons/uptime-kuma.png
       homepage.href: https://status.${LAB_DOMAIN}
       homepage.description: Service status monitoring
       homepage.weight: "50"

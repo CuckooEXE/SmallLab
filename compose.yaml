@@ -16,6 +16,8 @@ include:
   - compose/step-ca.yaml
   - compose/homepage.yaml
   - compose/technitium.yaml
+  - compose/ntp.yaml
+  - compose/dhcp.yaml   # opt-in: only starts under `--profile dhcp` (see compose/dhcp.yaml)
   - compose/forgejo.yaml
   - compose/minio.yaml
   - compose/samba.yaml
@@ -34,8 +36,10 @@ networks:
   # Ingress: Caddy and every container it reverse-proxies.
   caddy:
     name: caddy
-  # Back-of-house: samba only. Kept off the `caddy` ingress network; samba reaches
-  # the LAN through its own published 445/139 host ports (which require a normal,
-  # non-internal network -- Docker can't publish host ports through an internal one).
+  # Back-of-house: services that publish raw host ports instead of going through Caddy
+  # (samba on 445/139, ntp on 123/udp). Kept off the `caddy` ingress network; they reach
+  # the LAN through their own published ports, which require a normal, non-internal network
+  # -- Docker can't publish host ports through an internal one. (dhcp uses host networking
+  # and joins no Docker network at all.)
   backend:
     name: backend

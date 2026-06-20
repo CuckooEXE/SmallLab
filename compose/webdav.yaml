@@ -20,7 +20,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 8080}}"
       homepage.group: Storage & Packages
       homepage.name: WebDAV (curl)
-      homepage.icon: nginx.png
+      homepage.icon: /icons/nginx.png
       homepage.href: https://dav.${LAB_DOMAIN}
       homepage.description: curl GET/PUT/DELETE to the share
       homepage.weight: "25"

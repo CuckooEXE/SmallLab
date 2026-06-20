@@ -25,7 +25,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 5380}}"
       homepage.group: Infrastructure
       homepage.name: Technitium DNS
-      homepage.icon: technitium.png
+      homepage.icon: /icons/technitium.png
       homepage.href: https://dns.${LAB_DOMAIN}
       homepage.description: Authoritative DNS for *.${LAB_DOMAIN}
       homepage.weight: "20"

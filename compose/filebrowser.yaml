@@ -21,7 +21,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 80}}"
       homepage.group: Storage & Packages
       homepage.name: File Browser
-      homepage.icon: filebrowser.png
+      homepage.icon: /icons/filebrowser.png
       homepage.href: https://files.${LAB_DOMAIN}
       homepage.description: Web access to the share
       homepage.weight: "20"

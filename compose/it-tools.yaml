@@ -11,7 +11,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 80}}"
       homepage.group: Tools
       homepage.name: IT-Tools
-      homepage.icon: it-tools.png
+      homepage.icon: /icons/it-tools.png
       homepage.href: https://tools.${LAB_DOMAIN}
       homepage.description: Dev / crypto / network utilities, offline
       homepage.weight: "20"

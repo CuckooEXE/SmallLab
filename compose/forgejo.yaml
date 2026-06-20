@@ -40,7 +40,7 @@ services:
       caddy.reverse_proxy: "{{upstreams 3000}}"
       homepage.group: Storage & Packages
       homepage.name: Forgejo
-      homepage.icon: forgejo.png
+      homepage.icon: /icons/forgejo.png
       homepage.href: https://packages.${LAB_DOMAIN}
       homepage.description: Git forge + package registry
       homepage.weight: "10"

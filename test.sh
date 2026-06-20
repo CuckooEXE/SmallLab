@@ -249,6 +249,64 @@ else
   fi
 fi
 
+# --- 9. NTP (chrony @ HOST_IP:123) ------------------------------------------
+# Send a real SNTP client query and assert a server-mode reply with a sane stratum. Our
+# chrony serves the host clock as `local stratum 10`, so it answers even with no upstream.
+section "NTP (chrony @ ${HOST_IP}:123)"
+if have python3; then
+  ntp_out="$(python3 - "$HOST_IP" 2>/dev/null <<'PY'
+import socket, struct, sys, time
+host = sys.argv[1]
+pkt = b'\x23' + 47 * b'\x00'              # LI=0 VN=4 Mode=3 (client)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(5)
+try:
+    s.sendto(pkt, (host, 123)); data, _ = s.recvfrom(48)
+except Exception as e:
+    print("ERR", e); sys.exit(1)
+if len(data) < 48:
+    print("SHORT"); sys.exit(1)
+mode = data[0] & 7; stratum = data[1]
+txsec = struct.unpack('!I', data[40:44])[0] - 2208988800   # NTP epoch -> Unix
+print(f"mode={mode} stratum={stratum} skew={abs(txsec - int(time.time()))}s")
+sys.exit(0 if mode == 4 and 1 <= stratum <= 15 else 2)
+PY
+)"
+  if [[ $? -eq 0 ]]; then
+    pass "NTP server answers a client query ($ntp_out)"
+  else
+    fail "NTP" "no valid NTP reply from ${HOST_IP}:123 (${ntp_out:-no output})"
+  fi
+else
+  skip "NTP check" "python3 not installed"
+fi
+
+# --- 10. Homepage icons served locally (offline-safe) -----------------------
+# Every tile icon must come from Homepage itself (/icons/*), not a CDN, or the dashboard is
+# blank on an air-gapped LAN. Assert each checked-in icon serves as 200 image/*.
+section "Homepage local icons (served by Homepage, not a CDN)"
+icondir="$SCRIPT_DIR/config/homepage/icons"
+if [[ -d "$icondir" ]] && compgen -G "$icondir/*" >/dev/null; then
+  n_ok=0; n_bad=0
+  for f in "$icondir"/*; do
+    base="$(basename "$f")"
+    ct="$(labcurl "home.${LAB_DOMAIN}" -o /dev/null -w '%{http_code} %{content_type}' \
+            "https://home.${LAB_DOMAIN}/icons/${base}" 2>/dev/null)"
+    if [[ "$ct" == 200\ image/* ]]; then n_ok=$((n_ok+1)); else n_bad=$((n_bad+1)); echo "        miss: $base -> ${ct:-no response}"; fi
+  done
+  [[ $n_bad -eq 0 ]] && pass "all $n_ok dashboard icons served locally (HTTP 200, image/*)" \
+    || fail "local icons" "$n_bad/$((n_ok+n_bad)) icons not served as image/* by Homepage"
+else
+  skip "local icons" "config/homepage/icons is empty or missing"
+fi
+
+# --- 11. DHCP (opt-in; only checked when the profile is up) -----------------
+section "DHCP (dnsmasq -- opt-in)"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dhcp; then
+  pass "DHCP container running (enabled via --profile dhcp)"
+else
+  skip "DHCP checks" "not enabled -- start with: docker compose --profile dhcp up -d"
+fi
+
 # --- summary ----------------------------------------------------------------
 printf '\n\033[1m── summary ──\033[0m\n'
 printf '  \033[1;32m%d passed\033[0m, \033[1;31m%d failed\033[0m, \033[1;33m%d skipped\033[0m\n' "$PASS" "$FAIL" "$SKIP"

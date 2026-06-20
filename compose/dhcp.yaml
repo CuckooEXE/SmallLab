@@ -1,0 +1,44 @@
+# DHCP -- OPT-IN. Gated behind the compose profile "dhcp", so it NEVER starts on a plain
+# `docker compose up -d`; bring it up explicitly with `--profile dhcp` (see Playbook).
+#
+# dnsmasq in DHCP-ONLY mode (`--port=0` disables its DNS, so it never competes with
+# Technitium). It hands every client the lab's DNS (-> Technitium), NTP (-> chrony) and
+# domain, so a machine that just joins the LAN resolves *.lab and syncs time with ZERO
+# per-client config -- the whole "client setup" dance in the README becomes automatic.
+#
+# Why host networking: a DHCP DISCOVER is an L2 broadcast (0.0.0.0 -> 255.255.255.255) that
+# a bridged / published-port container never receives -- DHCP must sit directly on the LAN.
+# `--interface`/`--bind-interfaces` pins it to the lab NIC so it can't serve other segments.
+#
+# !! ONE DHCP server per broadcast domain. Run this ONLY if THIS host is the LAN's DHCP
+# authority. If a router already does DHCP, leave this off and instead point the router's
+# DNS (opt 6) and NTP (opt 42) at HOST_IP -- same outcome, no second server. See Playbook.
+services:
+  dhcp:
+    image: 4km3/dnsmasq@sha256:52e25fb2601156ab66f6a0872c180b285df7cafaa41267d8d65689f066490641  # :latest pinned 2026-06
+    container_name: dhcp
+    hostname: dhcp
+    restart: unless-stopped
+    profiles: [dhcp]            # opt-in: docker compose --profile dhcp up -d
+    network_mode: host          # DHCP broadcasts need direct LAN access (no bridge/NAT)
+    cap_add:
+      - NET_ADMIN               # bind :67 and drive the DHCP raw socket
+    # The image entrypoint is `dnsmasq --keep-in-foreground`; these flags append to it.
+    # ${...} is interpolated from .env (set DHCP_* there before enabling the profile).
+    command: >
+      --log-facility=-
+      --port=0
+      --interface=${DHCP_INTERFACE}
+      --bind-interfaces
+      --dhcp-authoritative
+      --dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${DHCP_NETMASK},${DHCP_LEASE}
+      --dhcp-option=option:router,${DHCP_GATEWAY}
+      --dhcp-option=option:dns-server,${HOST_IP}
+      --dhcp-option=option:ntp-server,${HOST_IP}
+      --dhcp-option=option:domain-name,${LAB_DOMAIN}
+    labels:
+      homepage.group: Infrastructure
+      homepage.name: DHCP (dnsmasq)
+      homepage.icon: /icons/dnsmasq.svg
+      homepage.description: Hands out lab DNS + NTP (opt-in)
+      homepage.weight: "26"

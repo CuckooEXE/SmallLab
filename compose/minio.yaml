@@ -23,7 +23,7 @@ services:
       caddy_1.reverse_proxy: "{{upstreams 9001}}"
       homepage.group: Storage & Packages
       homepage.name: MinIO (S3)
-      homepage.icon: minio.png
+      homepage.icon: /icons/minio.png
       homepage.href: https://s3-console.${LAB_DOMAIN}
       homepage.description: S3-compatible object storage
       homepage.weight: "50"

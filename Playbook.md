@@ -25,6 +25,7 @@ is **`/opt/lab`**.
 4. [Issue a cert from the CA](#4-issue-a-cert-from-the-ca)
 5. [Add DNS entries (Technitium web UI)](#5-add-dns-entries-technitium-web-ui)
 6. [Smoke-test and health](#6-smoke-test-and-health)
+7. [Enable DHCP (make the host the LAN's DHCP authority)](#7-enable-dhcp-make-the-host-the-lans-dhcp-authority)
 
 ---
 
@@ -82,7 +83,8 @@ the root CA to `./lab-root-ca.crt`, restarts Caddy to issue certs, and creates t
 admin user + public packages org. It is idempotent — re-run it any time.
 
 > **Firewall:** if the host runs one, allow inbound `80`, `443/tcp+udp`, `53/tcp+udp`,
-> `445/tcp`, `139/tcp`, `9000/tcp`, and `22/tcp` (for the backup pull).
+> `123/udp` (NTP), `445/tcp`, `139/tcp`, `9000/tcp`, and `22/tcp` (for the backup pull).
+> Only if you enable the DHCP profile (§7), also allow `67/udp` on the LAN NIC.
 
 Verify before moving on:
 
@@ -373,3 +375,61 @@ docker compose cp step-ca:/home/step/certs/root_ca.crt ./lab-root-ca.crt   # re-
 
 To rename the TLD, change `LAB_DOMAIN` in `.env`, then
 `docker compose up -d --force-recreate && ./bootstrap.sh` — nothing else hardcodes it.
+
+---
+
+## 7. Enable DHCP (make the host the LAN's DHCP authority)
+
+DHCP is **opt-in** and ships disabled (compose profile `dhcp`). Turn it on only when you
+want *this host* to address the LAN — it then hands every client the lab's DNS and NTP
+automatically, so joining the network is the entire client setup (the root CA still has to
+be trusted by hand; DHCP can't push it).
+
+> **Stop here if a router already runs DHCP.** Two DHCP servers on one segment hand out
+> conflicting leases. Either disable the router's DHCP first, **or** don't run this at all
+> and instead set the router's DNS (option 6) and NTP (option 42) to `HOST_IP` — that gets
+> you the same zero-config clients with no second server. Only proceed below if this host
+> is the *sole* DHCP server on the segment.
+
+```bash
+cd /opt/lab
+
+# 1. find the host's LAN NIC (the one on the lab subnet)
+ip -br link            # e.g. ens18 / eth0 / enp3s0
+
+# 2. fill in the DHCP_* block in .env to match the LAN:
+#      DHCP_INTERFACE=ens18              # the NIC from step 1
+#      DHCP_RANGE_START=192.168.1.100    # pool start (keep clear of static IPs + HOST_IP)
+#      DHCP_RANGE_END=192.168.1.200      # pool end
+#      DHCP_NETMASK=255.255.255.0
+#      DHCP_GATEWAY=192.168.1.1          # the LAN's real gateway/router
+#      DHCP_LEASE=12h
+
+# 3. start just the DHCP container (the rest of the stack keeps running untouched)
+docker compose --profile dhcp up -d
+docker compose logs -f dhcp            # watch for "DHCP, IP range ... lease time ..."
+```
+
+Verify a client gets a lease with the right options (DNS + NTP = `HOST_IP`, domain `lab`):
+
+```bash
+# on a client, request a fresh lease and inspect it
+sudo dhclient -v <iface>                       # or: nmcli con up <con>
+nmcli dev show <iface> | grep -E 'DNS|DOMAIN'  # should show HOST_IP and the lab domain
+resolvectl status <iface> | grep -A1 'DNS Servers'
+```
+
+dnsmasq runs **DNS-disabled** (`--port=0`), so it only ever answers DHCP — Technitium stays
+the only DNS server. It binds DHCP to `DHCP_INTERFACE` alone (`--bind-interfaces`), so it
+won't leak onto other NICs. Leases are kept in the (ephemeral) container; a restart just
+means clients re-request — harmless.
+
+Turn it back off:
+
+```bash
+docker compose --profile dhcp down dhcp     # or: docker compose rm -sf dhcp
+```
+
+> A plain `docker compose up -d` (no `--profile dhcp`) never starts DHCP and never stops a
+> running one — the profile gate keeps it out of the default lifecycle. Always include
+> `--profile dhcp` in commands meant to manage it.

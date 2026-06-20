@@ -23,6 +23,6 @@ services:
     labels:
       homepage.group: Storage & Packages
       homepage.name: Samba
-      homepage.icon: samba.png
+      homepage.icon: /icons/samba.png
       homepage.description: 'SMB share at \\files.${LAB_DOMAIN}\lab'
       homepage.weight: "30"
