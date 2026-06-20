@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #
 # fetch-docs.sh -- stage OFFLINE documentation content into volumes/ for the static doc
-# sites (cppreference, x86). This is the docs analog of `docker compose pull`: run it on a
-# machine WITH internet during the provisioning window, then carry the populated volumes/
+# sites (cppreference, x86, tldr). This is the docs analog of `docker compose pull`: run it on
+# a machine WITH internet during the provisioning window, then carry the populated volumes/
 # dirs to the air-gapped host (git clone + rsync of volumes/, or run this on the host while
 # it still has temporary internet). Nothing here is fetched at runtime.
 #
-#   ./fetch-docs.sh [all|cppreference|x86]   (default: all)
+#   ./fetch-docs.sh [all|cppreference|x86|tldr]   (default: all)
 #
+# Most targets need only curl/wget/tar; `tldr` additionally builds a static site in a
+# throwaway node container, so it also needs docker (already present on the provisioning box).
 # Re-runnable: each target re-populates its own volumes/<name> dir.
 set -euo pipefail
 
@@ -65,11 +67,60 @@ fetch_x86() {
   ok "x86 -> volumes/x86  (start: c9x.me/x86/index.html)"
 }
 
+# --- tldr.inbrowser.app (offline tldr-pages PWA) ----------------------------
+# Build the static site in a throwaway node container -- no host node/pnpm toolchain needed,
+# just docker (which the provisioning box already has for `compose pull`). The build's
+# `download:tldr-pages` step pulls the tldr-pages archive and BAKES it into the bundle, so
+# the finished site fetches nothing at runtime. node:20-alpine is build-time only; it never
+# runs on the air-gapped host, so it's not part of the prepull set.
+fetch_tldr() {
+  command -v docker >/dev/null || die "missing dependency: docker (tldr builds in a node container)"
+  command -v git    >/dev/null || die "missing dependency: git"
+  local dir="$V/tldr"; ensure_writable "$dir"
+  local src; src="$(mktemp -d)"
+  log "tldr: cloning InBrowserApp/tldr.inbrowser.app"
+  git clone --depth 1 https://github.com/InBrowserApp/tldr.inbrowser.app.git "$src" \
+    || { warn "tldr: clone failed"; rm -rf "$src"; return 1; }
+
+  # Air-gap: the in-browser page loader races the bundled zip against a live
+  # raw.githubusercontent.com fetch whenever the browser reports online (it's aborted the
+  # instant the local zip wins, but it's still an outbound attempt). Force the zip-only
+  # branch so a cold load never reaches off-box. Best-effort: if upstream restructured the
+  # guard the build still works, just with the race left in.
+  local gp="$src/src/data/tldr-pages/page/getPage.ts"
+  if [[ -f "$gp" ]] && grep -q 'isZipReady || !navigator.onLine' "$gp"; then
+    sed -i 's#if (isZipReady || !navigator.onLine) {#if (true /* air-gap: always serve from the bundled zip */) {#' "$gp"
+    ok "tldr: patched page loader to zip-only (air-gap)"
+  else
+    warn "tldr: zip-only air-gap patch did not apply (upstream changed?); github fallback left in place"
+  fi
+
+  log "tldr: building static site in node container (downloads tldr-pages archive + vite build)"
+  # Runs as root in-container; chowns the tree back to the invoking user at the end so the
+  # host-side cp/rm below don't trip over root-owned build output.
+  # pnpm 8 matches the repo's lockfileVersion 6.0 (corepack's default is newer and needs a
+  # newer Node than node:20-alpine ships). node 20 is fine for the vite 4 build.
+  docker run --rm -e HOME=/tmp -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+      -v "$src:/app" -w /app node:20-alpine sh -lc "
+        corepack enable &&
+        corepack prepare pnpm@8.15.9 --activate &&
+        pnpm install --frozen-lockfile &&
+        pnpm build &&
+        chown -R $(id -u):$(id -g) /app" \
+    || { warn "tldr: container build failed (leftovers in $src may be root-owned)"; return 1; }
+
+  rm -rf "${dir:?}"/* 2>/dev/null || true
+  cp -a "$src/dist/." "$dir/"
+  rm -rf "$src"
+  ok "tldr -> volumes/tldr  (start: index.html)"
+}
+
 case "${1:-all}" in
   cppreference) fetch_cppreference ;;
   x86)          fetch_x86 ;;
-  all)          fetch_cppreference; fetch_x86 ;;
-  *)            die "usage: $0 [all|cppreference|x86]" ;;
+  tldr)         fetch_tldr ;;
+  all)          fetch_cppreference; fetch_x86; fetch_tldr ;;
+  *)            die "usage: $0 [all|cppreference|x86|tldr]" ;;
 esac
 
-log "done. If you staged on a different machine, copy volumes/{cppreference,x86} to the air-gapped host."
+log "done. If you staged on a different machine, copy volumes/{cppreference,x86,tldr} to the air-gapped host."

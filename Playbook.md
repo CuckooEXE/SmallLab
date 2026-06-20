@@ -67,17 +67,20 @@ $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, se
                                           # the Forgejo runner needs it)
 
 # --- runtime dirs (bind mounts; git-ignored). A few need specific ownership. ---
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma,cppreference,x86}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term,opengrok/src,opengrok/data,opengrok/etc}
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
 sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
-# (the doc dirs are served read-only by nginx.)
+# (the doc dirs are served read-only by nginx. OpenGrok chowns volumes/opengrok/src to its own
+#  uid 1111 on boot, so it needs no manual chown here -- but that mount must stay WRITABLE: a
+#  :ro src makes the container exit at startup, surfacing as a Caddy 502. See §8.)
 
 # --- pull every image + stage offline docs up front (ONLINE window; air-gap prep) ---
 docker compose pull
-./fetch-docs.sh                           # stage cppreference + x86 content
+./fetch-docs.sh                           # stage cppreference + x86 + tldr content (tldr build needs docker)
+./build-profiles.sh                       # build the session profile images (code: Zig/Python; terminal: base/netutils)
 
 # --- bring it up and wire DNS + CA + Forgejo (+ register the Actions runner) ---
 docker compose up -d
@@ -217,6 +220,32 @@ rm -rf config/<name>
 
 Caddy drops the site and the dashboard tile disappears on its own (label-driven). No DNS
 change needed — the wildcard simply stops having a backend for that name.
+
+### Add or rebuild a session profile (code or terminal)
+
+Both `code.lab` and `terminal.lab` run the same `config/session-control/app.py` with a
+per-kind config (`code.json` / `terminal.json`). Profiles are baked images, so changes are an
+online/staging step. `<kind>` is `code` (FROM code-server) or `term` (FROM ttyd):
+
+```bash
+# 1. add or edit the Dockerfile (FROM the kind's pinned base; install tools/extensions)
+$EDITOR profiles/<kind>/<name>/Dockerfile
+# 2. register it (the control plane reads this; clients pick a profile by NAME only)
+$EDITOR config/session-control/<code|terminal>.json   # add "<name>": {"image":"lab/<kind>-<name>:latest", ...}
+# 3. (re)build -- needs internet (apt / toolchain download / Open VSX extensions)
+./build-profiles.sh <kind>/<name>             # or `<kind>` for all of a kind; omit for everything
+# 4. pick up the config change without rebuilding the control plane
+docker compose restart code-control           # or term-control
+```
+
+Running sessions keep the image they were created with; *new* sessions of that profile use
+the rebuilt image. Notes: code extensions install from **Open VSX** (Microsoft's first-party
+extensions aren't there — use Open-VSX ids or build from source, as the `zig` profile does for
+ZLS); the bind-mounted dir (`volumes/code/<name>/project` or `volumes/term/<name>/root`) is
+rsync-backed up; deleting a session from the UI removes its container **and** wipes that dir.
+
+> **Session not reachable?** `*.code.lab` / `*.terminal.lab` are one label deeper than `*.lab`,
+> so they need their own wildcards — `bootstrap.sh` adds both. If sessions 404 in DNS, re-run it.
 
 ---
 
@@ -476,12 +505,44 @@ the [Forgejo runner docs](https://forgejo.org/docs/latest/admin/actions/runner-i
 
 ### Offline docs (re-staging)
 
-Content lives in `volumes/{cppreference,x86}`, served read-only. Refresh it from a box with
-internet, then carry the dirs over:
+Content lives in `volumes/{cppreference,x86,tldr}`, served read-only. Refresh it from a box
+with internet (the `tldr` target also needs `docker` — it builds the PWA in a node container),
+then carry the dirs over:
 
 ```bash
-./fetch-docs.sh                 # both of them
+./fetch-docs.sh                 # all of them
 ./fetch-docs.sh cppreference    # just one target
 # if staged on another machine, rsync the dir(s) into the host's volumes/, then:
-docker compose restart cppreference x86
+docker compose restart cppreference x86 tldr
 ```
+
+### Code search (OpenGrok)
+
+OpenGrok (`search.lab`) cross-references and full-text-searches whatever source trees sit under
+`volumes/opengrok/src`, one project per top-level dir. It's anonymous and read-only — no login,
+no bootstrap step. Stage code with `./ingest-repos.sh` (offline; extracts archives or copies a
+dir in), then it reindexes on its timer (`SYNC_PERIOD_MINUTES`, default 15) or on restart:
+
+```bash
+./ingest-repos.sh ~/incoming/*.tar.gz      # or a directory: ./ingest-repos.sh ~/src/myproject
+docker compose restart opengrok            # index now instead of waiting for the timer
+```
+
+**The chown pattern.** OpenGrok's entrypoint runs as root and **chowns `/opengrok/src` to its
+`appuser` (uid 1111) on every boot.** Two consequences worth remembering:
+
+- The src mount **must be writable**. A `:ro` mount makes the boot-time chown fail, the container
+  exits, and the only symptom is a **Caddy 502** (an empty 502, not an OpenGrok error page).
+  `compose/opengrok.yaml` mounts src read-write for exactly this reason — don't re-add `:ro`.
+- After the first boot, `volumes/opengrok/src` is owned by uid 1111, so a later
+  `./ingest-repos.sh` run as your own user can't write into it. Take ownership back first;
+  OpenGrok silently re-chowns it on its next start (harmless — indexing only reads it):
+
+  ```bash
+  sudo chown -R "$USER" volumes/opengrok/src
+  ./ingest-repos.sh ...
+  docker compose restart opengrok
+  ```
+
+The service has a healthcheck against `/api/v1/system/ping`, so a crash-loop like the `:ro` case
+shows up as **unhealthy** in `docker compose ps` instead of silently 502-ing.

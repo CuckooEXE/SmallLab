@@ -91,12 +91,6 @@ get_code "drawio          draw.${LAB_DOMAIN}"        "draw.${LAB_DOMAIN}"       
 get_code "PrivateBin      paste.${LAB_DOMAIN}"       "paste.${LAB_DOMAIN}"       "/"
 get_code "Vaultwarden     vault.${LAB_DOMAIN}"       "vault.${LAB_DOMAIN}"       "/alive"
 get_code "Dozzle          logs.${LAB_DOMAIN}"        "logs.${LAB_DOMAIN}"        "/"
-# Uptime Kuma 302-redirects / -> /dashboard (or /setup before first-run setup); follow it
-# and assert the final 200 so the check is stable in both states.
-uk="status.${LAB_DOMAIN}"
-ukcode="$(labcurl "$uk" -L -o /dev/null -w '%{http_code}' "https://${uk}/" 2>/dev/null)"
-[[ "$ukcode" == 200 ]] && pass "Uptime Kuma     ${uk} (HTTP $ukcode after redirect)" \
-  || fail "Uptime Kuma     ${uk}" "expected 200 after redirect, got $ukcode"
 get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}"  "/"
 # (Forgejo / packages.lab is checked in its own section below)
 
@@ -105,6 +99,7 @@ get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}" 
 get_code "Compiler Explorer godbolt.${LAB_DOMAIN}"  "godbolt.${LAB_DOMAIN}"     "/"
 get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"      "/"
 get_code "x86 ref         x86.${LAB_DOMAIN}"         "x86.${LAB_DOMAIN}"         "/"
+get_code "tldr            tldr.${LAB_DOMAIN}"        "tldr.${LAB_DOMAIN}"        "/"
 
 # --- 4. step-ca health ------------------------------------------------------
 section "step-ca (ACME CA)"
@@ -324,6 +319,61 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dhcp; then
 else
   skip "DHCP checks" "not enabled -- start with: docker compose --profile dhcp up -d"
 fi
+
+# --- 13. Sessions: code workspaces + terminals (live create/reach/delete) ---
+# Both control planes (code.lab, terminal.lab) run the same session-control app, so one
+# parameterized check covers both: control UI up, profiles API, name sanitization, and a
+# full create -> reach-through-Caddy -> delete lifecycle.
+# check_session_kind <label> <prefix> <subdomain-base> <profile> <session-health-path>
+check_session_kind() {
+  local label="$1" prefix="$2" base="$3" prof="$4" hpath="$5"
+  local cc="${base}.${LAB_DOMAIN}"
+  get_code "${label}: control UI ${cc}" "$cc" "/"
+  if labcurl "$cc" "https://${cc}/api/profiles" 2>/dev/null | grep -q "\"${prof}\""; then
+    pass "${label}: profiles API lists '${prof}'"
+  else
+    fail "${label}: profiles API" "${cc}/api/profiles did not list '${prof}'"
+  fi
+  # Input sanitization: a bad session name must be rejected, not executed.
+  local badcode
+  badcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' --data '{"name":"BAD name; rm -rf /","profile":"base"}' \
+    "https://${cc}/api/sessions" 2>/dev/null)"
+  [[ "$badcode" == 400 ]] && pass "${label}: rejects an invalid session name (HTTP 400)" \
+    || fail "${label}: name sanitization" "expected 400 for a bad name, got $badcode"
+  # Full lifecycle: create a throwaway session, reach it through Caddy, tear it down.
+  local sn="smoke-${STAMP}" shost="smoke-${STAMP}.${base}.${LAB_DOMAIN}" crcode scode dcode i
+  crcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' --data "{\"name\":\"${sn}\",\"profile\":\"${prof}\"}" \
+    "https://${cc}/api/sessions" 2>/dev/null)"
+  if [[ "$crcode" == 200 ]]; then
+    pass "${label}: created ${sn} (HTTP $crcode)"
+    scode=000
+    for i in $(seq 1 20); do            # the session needs a moment to bind
+      scode="$(labcurl "$shost" -o /dev/null -w '%{http_code}' "https://${shost}${hpath}" 2>/dev/null || echo 000)"
+      [[ "$scode" == 200 ]] && break
+      sleep 1
+    done
+    [[ "$scode" == 200 ]] && pass "${label}: session reachable through Caddy (${shost}${hpath} 200)" \
+      || fail "${label}: session reachability" "${shost}${hpath} never returned 200 (last: $scode)"
+    dcode="$(labcurl "$cc" -o /dev/null -w '%{http_code}' -X DELETE "https://${cc}/api/sessions/${sn}" 2>/dev/null)"
+    [[ "$dcode" == 200 ]] && pass "${label}: deleted ${sn} (HTTP $dcode)" \
+      || fail "${label}: session delete" "expected 200, got $dcode"
+    if have docker; then
+      [[ -z "$(docker ps -aq -f "name=^${prefix}-${sn}$" 2>/dev/null)" ]] \
+        && pass "${label}: session container removed" || fail "${label}: session cleanup" "${prefix}-${sn} still present"
+    fi
+  else
+    labcurl "$cc" -o /dev/null -X DELETE "https://${cc}/api/sessions/${sn}" 2>/dev/null || true
+    skip "${label}: session lifecycle" "create returned $crcode (is ${prefix}-control up and the profile image built?)"
+  fi
+}
+
+section "Code workspaces (code.${LAB_DOMAIN})"
+check_session_kind "code" "code" "code" "base" "/healthz"
+
+section "Terminals (terminal.${LAB_DOMAIN})"
+check_session_kind "terminal" "term" "terminal" "base" "/"
 
 # --- summary ----------------------------------------------------------------
 printf '\n\033[1m── summary ──\033[0m\n'

@@ -10,8 +10,8 @@
 #   5. exports step-ca's root CA to ./lab-root-ca.crt
 #   6. sets step-ca's ACME cert lifetime (90 days; override via STEPCA_CERT_TTL)
 #   7. restarts Caddy so it issues certs now that DNS + CA are ready
-#   8. teaches uptime-kuma (Node) and vaultwarden (system store) to trust the lab root CA,
-#      so their OUTBOUND HTTPS to *.${LAB_DOMAIN} verifies instead of erroring
+#   8. teaches vaultwarden (system store) to trust the lab root CA, so its OUTBOUND HTTPS
+#      to *.${LAB_DOMAIN} verifies instead of erroring
 #   9. configures Forgejo: creates the admin user and a PUBLIC packages org (named after
 #      ${LAB_DOMAIN}) so package paths read packages.<dom>/<org>/...
 #
@@ -137,8 +137,18 @@ add_a() {  # add_a <name> <ip>
   ok "A  $name -> $ip"
 }
 log "writing A records -> $HOST_IP"
-add_a "*.$LAB_DOMAIN" "$HOST_IP"   # wildcard covers home.lab, dns.lab, packages.lab, ...
-add_a "$LAB_DOMAIN"   "$HOST_IP"   # apex, for bare \\lab style references
+add_a "*.$LAB_DOMAIN" "$HOST_IP"        # wildcard covers home.lab, dns.lab, packages.lab, ...
+add_a "$LAB_DOMAIN"   "$HOST_IP"        # apex, for bare \\lab style references
+# Per-session subdomains for the on-demand session control planes. These live one label
+# deeper than the stack, which the *.lab wildcard above doesn't reach (it matches one label).
+add_a "*.code.$LAB_DOMAIN" "$HOST_IP"       # <name>.code.lab  (code-server workspaces)
+add_a "*.terminal.$LAB_DOMAIN" "$HOST_IP"   # <name>.terminal.lab  (ttyd terminals)
+# IMPORTANT: adding *.code.lab / *.terminal.lab makes code.lab / terminal.lab EMPTY
+# NON-TERMINALS (a node now exists *below* them), and per RFC 4592 a wildcard no longer
+# synthesizes for an empty non-terminal -- so *.lab stops answering for the control-plane
+# apexes themselves. They must therefore be listed EXPLICITLY:
+add_a "code.$LAB_DOMAIN"     "$HOST_IP"  # control UI (else NODATA -> no cert, won't resolve)
+add_a "terminal.$LAB_DOMAIN" "$HOST_IP"  # control UI (else NODATA -> no cert, won't resolve)
 
 # --- 5. export step-ca's root CA -------------------------------------------
 log "exporting step-ca root CA"
@@ -189,27 +199,16 @@ if [[ "$exported" == "1" ]]; then
     || warn "could not restart Caddy; run 'docker compose restart caddy' yourself"
 fi
 
-# --- 8. teach uptime-kuma + vaultwarden to trust the lab CA ----------------
-# These two make OUTBOUND HTTPS calls to *.lab and so need the lab root in their OWN trust
-# store (a client connecting *to* a service only needs the CA on the client side):
-#   * uptime-kuma (Node) reads NODE_EXTRA_CA_CERTS, which compose points at
-#     /app/data/lab-root-ca.crt -- inside its persistent data volume, so the trust survives
-#     recreates. Drop the exported CA there and restart.
-#   * vaultwarden's binary is OpenSSL-linked, so it trusts the system store: install the CA
-#     under /usr/local/share/ca-certificates and run update-ca-certificates. That lives in
-#     the container's writable layer (lost on --force-recreate / image bump), but re-running
-#     bootstrap re-applies it -- which is already the post-recreate routine.
+# --- 8. teach vaultwarden to trust the lab CA ------------------------------
+# vaultwarden makes OUTBOUND HTTPS calls to *.lab and so needs the lab root in its OWN trust
+# store (a client connecting *to* a service only needs the CA on the client side).
+# vaultwarden's binary is OpenSSL-linked, so it trusts the system store: install the CA under
+# /usr/local/share/ca-certificates and run update-ca-certificates. That lives in the
+# container's writable layer (lost on --force-recreate / image bump), but re-running bootstrap
+# re-applies it -- which is already the post-recreate routine.
 # Soft-fails throughout: a hiccup here never wedges the rest of the bootstrap.
 trust_lab_ca() {
   [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping container CA trust"; return; }
-
-  # uptime-kuma: file in the data volume; NODE_EXTRA_CA_CERTS is already set in compose.
-  if docker compose cp "$CA_OUT" uptime-kuma:/app/data/lab-root-ca.crt >/dev/null 2>&1 \
-     && docker compose restart uptime-kuma >/dev/null 2>&1; then
-    ok "uptime-kuma trusts the lab CA (NODE_EXTRA_CA_CERTS)"
-  else
-    warn "could not install the CA into uptime-kuma -- is it up? ('docker compose ps uptime-kuma')"
-  fi
 
   # vaultwarden: system trust store (OpenSSL-linked binary), then restart so it reloads it.
   if docker compose cp "$CA_OUT" vaultwarden:/usr/local/share/ca-certificates/lab-root-ca.crt >/dev/null 2>&1 \
@@ -220,7 +219,7 @@ trust_lab_ca() {
     warn "could not install the CA into vaultwarden -- is it up? ('docker compose ps vaultwarden')"
   fi
 }
-log "teaching uptime-kuma + vaultwarden to trust the lab CA"
+log "teaching vaultwarden to trust the lab CA"
 trust_lab_ca
 
 # --- 9. Forgejo: admin user + public packages org --------------------------
@@ -356,6 +355,10 @@ log "configuring the Forgejo Actions runner"
 setup_forgejo_runner \
   || warn "Forgejo runner setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
+# OpenGrok (search.lab) needs no bootstrap: it's anonymous + read-only and indexes whatever is
+# under volumes/opengrok/src on startup and every SYNC_PERIOD_MINUTES. Stage code with
+# ./ingest-repos.sh (see the next-steps note below).
+
 # --- next steps -------------------------------------------------------------
 cat <<EOF
 
@@ -385,4 +388,8 @@ Next steps on each client machine
        Linux  : sudo mount -t cifs //files.$LAB_DOMAIN/lab /mnt/lab -o guest,vers=3.0
        Windows: net use Z: \\\\files.$LAB_DOMAIN\\lab    (enable insecure guest logons first;
                 Windows blocks guest SMB by default -- see README)
+
+  5. Code search -- OpenGrok at https://search.$LAB_DOMAIN (read-only, no login). Index code by
+     dropping source archives in; it reindexes on a timer (or restart to index now):
+       ./ingest-repos.sh <archive.tar.gz|dir> ...   &&   docker compose restart opengrok
 EOF

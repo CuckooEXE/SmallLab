@@ -35,10 +35,12 @@ Technitium makes `*.lab` resolve to the host; `bootstrap.sh` wires DNS + the CA 
 | **PrivateBin** | `https://paste.lab`                             | via Caddy                    | client-side-encrypted pastebin (server sees only ciphertext) |
 | **Vaultwarden**| `https://vault.lab`                             | via Caddy                    | Bitwarden-compatible secrets vault |
 | **Dozzle**     | `https://logs.lab`                              | via Caddy                    | live Docker log viewer for this stack |
-| **Uptime Kuma**| `https://status.lab`                            | via Caddy                    | uptime / status + TLS-expiry monitoring |
 | **Compiler Explorer** | `https://godbolt.lab`                    | via Caddy                    | [Compiler Explorer](https://github.com/compiler-explorer/compiler-explorer) (Godbolt) — interactive source→asm |
+| **Code Workspaces** | `https://code.lab`, sessions at `https://<name>.code.lab` | via Caddy        | on-demand [code-server](https://github.com/coder/code-server) sessions — create / open / stop / delete from a tiny UI; baked per-language profiles. **No login** (shared) |
+| **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
 | **x86 ref**    | `https://x86.lab`                               | via Caddy                    | offline x86/x64 instruction reference (mirror of [c9x.me/x86](https://c9x.me/x86/)) |
+| **tldr**       | `https://tldr.lab`                              | via Caddy                    | offline tldr-pages command cheatsheets ([tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA; pages baked into the bundle) |
 
 Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only, so they
 don't collide with `systemd-resolved` on `127.0.0.53` or a host smbd. Caddy binds `0.0.0.0`.
@@ -55,9 +57,14 @@ config/               # checked-in config the services read
   homepage/           #   dashboard config (+ files Homepage regenerates, git-ignored)
   filebrowser/        #   settings.json
   nginx/              #   WebDAV nginx.conf (mounted into the official nginx image)
+  session-control/    #   shared session control plane: app.py + code.json + terminal.json
+profiles/             # baked session profiles, by kind (built by build-profiles.sh)
+  code/zig/ code/python/   #   FROM code-server + toolchain/extensions
+  term/base/ term/netutils/ #  FROM ttyd + tmux/CLI tools
 volumes/              # runtime state -- bind mounts, git-ignored, NOT checked in
-  caddy/ stepca/ technitium/ forgejo/ filebrowser/ minio/ share/
+  caddy/ stepca/ technitium/ forgejo/ filebrowser/ minio/ share/ code/ term/
 bootstrap.sh          # post-`up` DNS + CA + Forgejo wiring (idempotent)
+build-profiles.sh     # build the baked session profile images (staging step)
 .env                  # secrets + HOST_IP + LAB_DOMAIN (git-ignored; copy from .env.example)
 backup/               # pull-based backup tooling (runs on the backup server)
 Playbook.md           # day-two operations
@@ -79,7 +86,7 @@ $EDITOR .env          # set HOST_IP to this box, change the change-me passwords,
 
 # 2. on a FRESH host, create the runtime dirs (bind mounts, git-ignored). Most
 #    services run as root; a few don't: own those to match before first `up`.
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,uptime-kuma,cppreference,x86}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,cppreference,x86,tldr,code,term}
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
 sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
@@ -90,6 +97,11 @@ sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 
 # 2b. stage offline docs content (cppreference + x86). Needs internet -- run it in the
 #     ONLINE provisioning window, like `docker compose pull`.
 ./fetch-docs.sh
+
+# 2c. build the baked session profile images (code: Zig/Python; terminal: base/netutils).
+#     Needs internet -- same online window; pulls the code-server + ttyd bases and bakes
+#     each profile. The control planes' own base (python:slim) comes from `docker compose pull`.
+./build-profiles.sh
 
 # 3. bring it up  (run from this dir; it finds compose.yaml + .env automatically)
 docker compose up -d
@@ -320,20 +332,99 @@ add your own (a vendor cross-compiler, a specific gcc/clang), mount the toolchai
 container and extend CE's compiler config — see
 [Adding a compiler](https://github.com/compiler-explorer/compiler-explorer/blob/main/docs/AddingACompiler.md).
 
+## On-demand sessions (code workspaces + terminals)
+
+Two tiny control planes let anyone spin up, come back to, and tear down throwaway
+containers from a browser — **no login**, so everyone sees every session and opening the
+same URL is how you pair on it:
+
+- [`https://code.lab`](https://code.lab) — **[code-server](https://github.com/coder/code-server)
+  workspaces** (browser VS Code, integrated terminal included), sessions at `<name>.code.lab`.
+- [`https://terminal.lab`](https://terminal.lab) — **browser terminals** ([ttyd](https://github.com/tsl0922/ttyd)
+  running `tmux`), sessions at `<name>.terminal.lab`. A reconnect or a second tab reattaches
+  the **same tmux session**, so terminals survive disconnects and are shareable for pairing.
+
+Both are the **same** service — `config/session-control/app.py`, a stdlib-Python control
+plane driven by a per-kind config (`code.json` / `terminal.json`). It speaks the Docker
+Engine API over the socket (no shell, no pip deps).
+
+**From either web UI** (or the JSON API each serves — see below):
+
+- **Create** — pick a name (`[a-z0-9-]`, ≤31 chars) and a profile, hit *Create*. A container
+  spins up at `https://<name>.<kind>.lab` and the tab opens. Caddy routes it the moment it
+  starts (it reads the labels the control plane sets); step-ca issues its cert on first hit.
+- **Open / Resume** — *Open* a running session, or *Resume* a stopped one (it keeps its files).
+- **Stop** — stops the container but keeps the data (resumable). **Delete** — removes the
+  container **and wipes** its data.
+
+Everything is scriptable over the same API (handy from another box on the LAN); swap
+`code` → `terminal` for the other kind:
+
+```bash
+# list / create / stop / delete  (curl pins the name to HOST_IP + trusts the lab CA)
+C="https://code.lab"; R="--resolve code.lab:443:$HOST_IP --cacert lab-root-ca.crt"
+curl -sS $R "$C/api/profiles"
+curl -sS $R -X POST "$C/api/sessions" -H 'content-type: application/json' -d '{"name":"poc","profile":"zig"}'
+curl -sS $R "$C/api/sessions"
+curl -sS $R -X POST   "$C/api/sessions/poc/stop"
+curl -sS $R -X DELETE "$C/api/sessions/poc"
+```
+
+**Profiles** are pre-built images (`profiles/<kind>/<name>/Dockerfile`, built by
+`./build-profiles.sh`) that bake in a toolchain, listed per kind in
+`config/session-control/{code,terminal}.json`:
+
+| Kind | Profile | Bakes in |
+|------|---------|----------|
+| code     | `base`     | plain code-server |
+| code     | `zig`      | Zig + ZLS + `ziglang.vscode-zig` (extension from Open VSX) |
+| code     | `python`   | Python 3 + venv/pip + `ms-pyright.pyright`, `charliermarsh.ruff` |
+| terminal | `base`     | bash + tmux + vim/git/curl |
+| terminal | `netutils` | base + nmap / tcpdump / netcat / dns tools |
+
+Add one by dropping `profiles/<kind>/<name>/Dockerfile`, adding an entry to that kind's
+config, and running `./build-profiles.sh <kind>/<name>` (an online/staging step — it
+`apt`-installs, downloads toolchains, installs extensions, then the images run fully offline).
+For **code** profiles, note that Microsoft's first-party VS Code extensions are **not** on
+Open VSX (code-server's registry), so use Open-VSX ids or build the tool from source in the
+Dockerfile (the `zig` profile builds ZLS that way).
+
+**Persistence & backup** — one dir per session is bind-mounted — the **project dir**
+(`volumes/code/<name>/project`) for workspaces, **`/root`** (`volumes/term/<name>/root`) for
+terminals — so your work lands in the rsync backup like everything else under `volumes/`. The
+rest of the container layer is kept across stop/resume and wiped on delete.
+
+**DNS** — sessions live one label deeper than the stack, so `bootstrap.sh` adds
+`*.code.lab` and `*.terminal.lab` records alongside the `*.lab` wildcard.
+
+> **Security note.** Each control plane drives the **Docker socket** (root-equivalent) and is
+> **unauthenticated** by design for now (LAN-trust, like Dozzle/Homepage). It is written to be
+> safe regardless: no shell (it speaks the Docker Engine API with JSON bodies), a strict
+> session-name allowlist that makes the name safe in every context, path-traversal checks, a
+> server-side-only image (clients send a profile *name*), and destructive ops that only touch
+> containers carrying the control plane's own label. When you add auth to the stack, put these
+> endpoints behind it first.
+
 ## Offline programming references
 
-Two static-HTML reference sites, each its own dashboard tile, served by a tiny nginx over a
-git-ignored `volumes/<name>` tree. Content is **not** fetched at runtime — `./fetch-docs.sh`
-stages it during the online provisioning window (the docs analog of `docker compose pull`),
-then the populated dirs travel to the air-gapped host:
+Three reference sites, each its own dashboard tile, served by a tiny nginx over a git-ignored
+`volumes/<name>` tree. Content is **not** fetched at runtime — `./fetch-docs.sh` stages it
+during the online provisioning window (the docs analog of `docker compose pull`), then the
+populated dirs travel to the air-gapped host:
 
 | Tile | URL | Source | Stage with |
 |------|-----|--------|------------|
 | cppreference | `https://cppref.lab` | PeterFeicht html-book archive | `./fetch-docs.sh cppreference` |
 | x86 ref | `https://x86.lab` | mirror of `c9x.me/x86/` | `./fetch-docs.sh x86` |
+| tldr | `https://tldr.lab` | [tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA, built from source | `./fetch-docs.sh tldr` |
 
-`fetch-docs.sh` drops a small redirect `index.html` at each volume root so the bare URL lands
-on the right page.
+For the two plain-HTML mirrors, `fetch-docs.sh` drops a small redirect `index.html` at the
+volume root so the bare URL lands on the right page. **tldr** is different: it's a Vue PWA
+whose build bakes the whole tldr-pages archive into the bundle, so staging it *builds* the
+static site in a throwaway node container (needs `docker`, not just curl/wget) rather than
+downloading one. Because it's a history-mode SPA it carries its own nginx config
+(`config/nginx/tldr.conf`, deep links fall back to `index.html`); the build also patches the
+in-browser page loader to read only the bundled archive so a cold load never reaches GitHub.
 
 ## Using object storage (MinIO)
 

@@ -31,11 +31,14 @@ include:
   - compose/privatebin.yaml
   - compose/vaultwarden.yaml
   - compose/dozzle.yaml
-  - compose/uptime-kuma.yaml
   - compose/compiler-explorer.yaml # Godbolt -- source to asm
-  # Offline programming references (static HTML; content staged by ./fetch-docs.sh):
+  - compose/code-control.yaml      # on-demand code-server workspaces (code.lab + *.code.lab)
+  - compose/term-control.yaml      # on-demand browser terminals (terminal.lab + *.terminal.lab)
+  - compose/opengrok.yaml          # code search + cross-reference over local repos (./ingest-repos.sh)
+  # Offline programming references (content staged by ./fetch-docs.sh):
   - compose/cppreference.yaml
   - compose/x86.yaml
+  - compose/tldr.yaml   # tldr-pages PWA (built static site, not a plain-HTML mirror)
 
 networks:
   # Ingress: Caddy and every container it reverse-proxies.

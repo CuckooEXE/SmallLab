@@ -1,0 +1,7 @@
+{
+  "zig.path": "/usr/local/bin/zig",
+  "zig.zls.path": "/usr/local/bin/zls",
+  "zig.zls.enabled": true,
+  "zig.formattingProvider": "zls",
+  "telemetry.telemetryLevel": "off"
+}
