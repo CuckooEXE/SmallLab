@@ -10,9 +10,9 @@ include:
   - compose/homepage.yaml
   - compose/technitium.yaml
   - compose/ntp.yaml
-  - compose/dhcp.yaml   # opt-in (--profile dhcp)
+  - compose/dhcp.yaml
   - compose/forgejo.yaml
-  - compose/forgejo-runner.yaml   # Actions CI runner (registered by bootstrap.sh)
+  - compose/forgejo-runner.yaml
   - compose/minio.yaml
   - compose/samba.yaml
   - compose/filebrowser.yaml
@@ -24,25 +24,22 @@ include:
   - compose/privatebin.yaml
   - compose/vaultwarden.yaml
   - compose/dozzle.yaml
-  - compose/compiler-explorer.yaml # Godbolt -- source to asm
-  - compose/plantuml.yaml          # render UML diagrams from text
-  - compose/code-control.yaml      # on-demand code-server workspaces (code.lab)
-  - compose/term-control.yaml      # on-demand browser terminals (terminal.lab)
-  - compose/opengrok.yaml          # code search + cross-reference (./ingest-repos.sh)
-  # Offline programming tools (self-contained images built by ./build.sh):
-  - compose/astexplorer.yaml       # parse source to an AST
-  - compose/jsoncrack.yaml         # visualize JSON/YAML/CSV as graphs
-  - compose/mermaid.yaml           # diagrams-as-code editor
-  - compose/sqlime.yaml            # SQLite playground (WASM)
-  - compose/jqkungfu.yaml          # jq playground (WASM)
-  # Offline programming references (self-contained images built by ./build.sh):
+  - compose/compiler-explorer.yaml
+  - compose/plantuml.yaml
+  - compose/code-control.yaml
+  - compose/term-control.yaml
+  - compose/opengrok.yaml
+  - compose/astexplorer.yaml
+  - compose/jsoncrack.yaml
+  - compose/mermaid.yaml
+  - compose/sqlime.yaml
+  - compose/jqkungfu.yaml
   - compose/cppreference.yaml
   - compose/x86.yaml
   - compose/tldr.yaml
   - compose/syscalls.yaml
   - compose/devhints.yaml
   - compose/explainshell.yaml
-  # Offline security references (self-contained images built by ./build.sh):
   - compose/hacktricks.yaml
   - compose/gtfobins.yaml
   - compose/lolbas.yaml

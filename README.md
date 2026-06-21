@@ -229,8 +229,10 @@ Mechanics, the retention curve, and disaster recovery are in [`backup/README.md`
   digest from `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
 - **`.env`, `lab-root-ca.crt`, and `volumes/` are git-ignored.** Keep `.env` and the CA in a
   password manager — they're not reproducible from git.
-- **The trusted root lives in `volumes/stepca/`** (step-ca's root), and is included in
-  backups. Lose it and every client must re-trust a new root.
+- **The trusted root lives in `volumes/stepca/`** (root + intermediate, their keys, and the key
+  password) and is included in backups. Lose it and every client must re-trust a new root; to
+  rebuild the stack while keeping it, see
+  [Playbook → Preserve the root CA](Playbook.md#preserve-the-root-ca-across-a-rebuild).
 - **Certs validate only for clients that trust the exported root CA** — inherent to a private
   TLD. A real domain + DNS-01 would yield publicly trusted certs instead.
 - **`LAB_DOMAIN` is the only place the TLD is set.** It is interpolated into every `caddy:` and

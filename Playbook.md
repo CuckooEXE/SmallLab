@@ -23,6 +23,7 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Add DNS records](#add-dns-records)
 - [Run a backup](#run-a-backup)
 - [Restore a snapshot](#restore-a-snapshot)
+- [Preserve the root CA across a rebuild](#preserve-the-root-ca-across-a-rebuild)
 - [Enable or disable DHCP](#enable-or-disable-dhcp)
 - [Index code in OpenGrok](#index-code-in-opengrok)
 - [Rebuild images](#rebuild-images)
@@ -404,6 +405,36 @@ sudo /opt/lab-backup/lab-restore.sh restore 20260619T030000 --target /opt/lab/vo
 `--force` skips the overwrite prompt. The tree comes back with the same paths/perms/UIDs, so the
 stack mounts it straight back. `.env` and `lab-root-ca.crt` are not in the backup — restore those
 from your password manager. Run `./test.sh` afterward.
+
+---
+
+## Preserve the root CA across a rebuild
+
+**Description.** Wipe and rebuild the whole stack from scratch while keeping the SAME trusted
+root, so clients never have to re-trust a new CA. The entire CA lives in `volumes/stepca/` (root +
+intermediate certs, their keys, and the key password) — the exported `lab-root-ca.crt` is only the
+public cert and is NOT enough on its own.
+**When to use.** Resetting all state on a host, or moving the CA to a brand-new host.
+
+```bash
+# 1. save the CA (private keys + password are inside -- treat it like a secret)
+sudo tar czf lab-ca-backup.tgz -C volumes stepca
+
+# 2. bring the stack up fresh, restoring ONLY the CA before first boot
+docker compose down --remove-orphans
+rm -rf volumes/*                                   # wipe all state
+mkdir -p volumes/{caddy/data,caddy/config,stepca,...}   # recreate the skeleton (README -> Install)
+sudo tar xzf lab-ca-backup.tgz -C volumes          # drop the saved CA back in
+sudo chown -R 1000:1000 volumes/stepca             # step-ca runs as uid 1000
+
+docker compose up -d && ./bootstrap.sh
+```
+
+step-ca only auto-inits when its volume is empty, so with `volumes/stepca/` already populated it
+boots the identical root + intermediate — no re-init. Caddy re-enrolls fresh leaf certs from the
+same CA over ACME, and every client that already trusts `lab-root-ca.crt` stays valid. This is just
+a [Restore a snapshot](#restore-a-snapshot) limited to `volumes/stepca/`; to carry the CA to a new
+host, copy `lab-ca-backup.tgz` over and untar it before the first `up`.
 
 ---
 
