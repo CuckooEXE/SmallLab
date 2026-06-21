@@ -1,5 +1,6 @@
-# Linux Syscall Tables -- offline syscall-number reference (syscalls.lab). Self-contained image
-# mirroring Juszkiewicz's cross-architecture table, built by ./build-refs.sh. Read-only, no state.
+# Linux Syscall Tables -- offline x86-64 syscall reference (syscalls.lab). Self-contained image
+# built from mebeim/linux-syscalls (Systrack): x86-64 tables by kernel version (v4.0-v6.17) with
+# full signatures -- arg names, C types, and registers. Built by ./build-refs.sh. Read-only, no state.
 services:
   syscalls:
     image: lab/syscalls:latest
@@ -13,6 +14,6 @@ services:
       homepage.group: Reference
       homepage.name: Syscall Tables
       homepage.icon: /icons/syscalls.svg
-      homepage.href: https://syscalls.${LAB_DOMAIN}
-      homepage.description: Linux syscall numbers, all arches
+      homepage.href: https://syscalls.${LAB_DOMAIN}/?table=x86/64/x64/latest
+      homepage.description: x86-64 syscalls by kernel version
       homepage.weight: "38"
