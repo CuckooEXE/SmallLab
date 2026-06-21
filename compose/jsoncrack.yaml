@@ -1,0 +1,18 @@
+# JSON Crack -- offline JSON/YAML/CSV/XML visualizer (jsoncrack.lab). Self-contained image built
+# by ./build.sh. Read-only, no state.
+services:
+  jsoncrack:
+    image: lab/jsoncrack:latest
+    container_name: jsoncrack
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: jsoncrack.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: JSON Crack
+      homepage.icon: /icons/jsoncrack.svg
+      homepage.href: https://jsoncrack.${LAB_DOMAIN}
+      homepage.description: Visualize JSON / YAML / CSV as graphs
+      homepage.weight: "42"

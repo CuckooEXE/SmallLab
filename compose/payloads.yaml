@@ -1,5 +1,5 @@
 # PayloadsAllTheThings -- offline payload/technique reference (payloads.lab). Self-contained
-# image: the repo's own mkdocs-material site built from source by ./build-refs.sh (offline
+# image: the repo's own mkdocs-material site built from source by ./build.sh (offline
 # search kept). Read-only, no state.
 services:
   payloads:

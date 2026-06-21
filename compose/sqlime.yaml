@@ -1,0 +1,18 @@
+# SQLime -- offline SQLite playground (sqlime.lab). Self-contained image built by ./build.sh.
+# Read-only, no state.
+services:
+  sqlime:
+    image: lab/sqlime:latest
+    container_name: sqlime
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: sqlime.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: SQLime
+      homepage.icon: /icons/sqlime.svg
+      homepage.href: https://sqlime.${LAB_DOMAIN}
+      homepage.description: SQLite playground (WASM), in-browser
+      homepage.weight: "46"

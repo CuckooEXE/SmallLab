@@ -1,5 +1,5 @@
 # GTFOBins -- offline Unix living-off-the-land reference (gtfobins.lab). Self-contained image:
-# the upstream Jekyll site built from source by ./build-refs.sh. Read-only, no state.
+# the upstream Jekyll site built from source by ./build.sh. Read-only, no state.
 services:
   gtfobins:
     image: lab/gtfobins:latest

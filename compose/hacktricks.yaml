@@ -1,5 +1,5 @@
 # HackTricks -- offline pentest methodology wiki (hacktricks.lab). Self-contained image: the
-# English book built with HackTricks' own mdBook toolchain by ./build-refs.sh. Read-only, no state.
+# English book built with HackTricks' own mdBook toolchain by ./build.sh. Read-only, no state.
 services:
   hacktricks:
     image: lab/hacktricks:latest

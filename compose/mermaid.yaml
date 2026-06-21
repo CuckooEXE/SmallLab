@@ -1,0 +1,18 @@
+# Mermaid Live Editor -- offline diagrams-as-code editor (mermaid.lab). Self-contained image built
+# by ./build.sh. Read-only, no state.
+services:
+  mermaid:
+    image: lab/mermaid:latest
+    container_name: mermaid
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: mermaid.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: Mermaid Live Editor
+      homepage.icon: /icons/mermaid.svg
+      homepage.href: https://mermaid.${LAB_DOMAIN}
+      homepage.description: Diagrams-as-code, rendered in-browser
+      homepage.weight: "44"

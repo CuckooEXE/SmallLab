@@ -105,7 +105,7 @@ get_code "Dozzle          logs.${LAB_DOMAIN}"        "logs.${LAB_DOMAIN}"       
 get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}"  "/"
 # (Forgejo / packages.lab is checked in its own section below)
 
-# Dev tooling + offline references. The doc sites return 200 only once ./build-refs.sh has
+# Dev tooling + offline references. The doc sites return 200 only once ./build.sh has
 # built their images (lab/<name>:latest) and they're present on the host.
 get_code "Compiler Explorer godbolt.${LAB_DOMAIN}"  "godbolt.${LAB_DOMAIN}"     "/"
 get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"      "/"

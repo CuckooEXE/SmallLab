@@ -7,7 +7,7 @@
 # (or copies a directory in); OpenGrok picks it up on its next sync (every SYNC_PERIOD_MINUTES,
 # see compose/opengrok.yaml) -- or restart the container to index immediately.
 #
-# Fully OFFLINE -- unlike ./build-refs.sh this needs no internet, so run it any time on the
+# Fully OFFLINE -- unlike ./build.sh this needs no internet, so run it any time on the
 # air-gapped host.
 #
 #   ./ingest-repos.sh <archive-or-dir> [<archive-or-dir> ...]

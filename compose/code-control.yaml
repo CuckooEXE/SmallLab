@@ -1,6 +1,6 @@
 # code-control -- on-demand code-server workspaces (code.lab). The shared session-control
 # app (config/session-control/app.py + code.json) creates/resumes/deletes per-session
-# containers at <name>.code.lab from baked profiles (profiles/code/), each with a project
+# containers at <name>.code.lab from baked profiles (images/code-*), each with a project
 # volume under volumes/code/<name>/project. Drives the Docker socket; unauthenticated (LAN-trust).
 services:
   code-control:

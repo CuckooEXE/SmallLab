@@ -1,5 +1,5 @@
 # cppreference -- offline C/C++ standard library reference (cppref.lab). Self-contained image
-# built from the PeterFeicht html-book by ./build-refs.sh. Read-only, no state.
+# built from the PeterFeicht html-book by ./build.sh. Read-only, no state.
 services:
   cppreference:
     image: lab/cppreference:latest

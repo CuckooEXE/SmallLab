@@ -1,5 +1,5 @@
 # tldr -- offline tldr-pages reference (tldr.lab). Self-contained image: the InBrowserApp PWA
-# (with the tldr-pages archive baked in) plus its SPA nginx config, built by ./build-refs.sh.
+# (with the tldr-pages archive baked in) plus its SPA nginx config, built by ./build.sh.
 # Read-only, no state.
 services:
   tldr:

@@ -1,5 +1,5 @@
 # DevHints -- offline developer cheatsheets (devhints.lab). Self-contained image: the devhints.io
-# Astro site built from source by ./build-refs.sh. Read-only, no state.
+# Astro site built from source by ./build.sh. Read-only, no state.
 services:
   devhints:
     image: lab/devhints:latest

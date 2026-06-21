@@ -1,5 +1,5 @@
 # x86 -- offline x86/x64 instruction-set reference (x86.lab). Self-contained image mirroring
-# c9x.me/x86, built by ./build-refs.sh. Read-only, no state.
+# c9x.me/x86, built by ./build.sh. Read-only, no state.
 services:
   x86:
     image: lab/x86:latest

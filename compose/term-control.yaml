@@ -1,6 +1,6 @@
 # term-control -- on-demand browser terminals (terminal.lab). The shared session-control
 # app (config/session-control/app.py + terminal.json) creates/resumes/deletes per-session
-# ttyd containers at <name>.terminal.lab from baked profiles (profiles/term/); ttyd runs
+# ttyd containers at <name>.terminal.lab from baked profiles (images/term-*); ttyd runs
 # `tmux new -A -s main` so reconnects reattach, and /root persists under volumes/term/<name>/root.
 # Drives the Docker socket; unauthenticated (LAN-trust).
 services:

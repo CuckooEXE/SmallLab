@@ -2,8 +2,9 @@
 
 SmallLab is a single `docker compose` stack that turns one Linux host into a self-contained
 `.lab` environment for a LAN: trusted HTTPS on every service, a dashboard, DNS, NTP, a
-universal package registry, object storage, a file share, on-demand dev sessions, and a shelf
-of offline references — from one repo, with no runtime dependency on the public internet.
+universal package registry, object storage, a file share, on-demand dev sessions, a set of
+browser-based dev tools, and a shelf of offline references — from one repo, with no runtime
+dependency on the public internet.
 
 What it accomplishes:
 
@@ -44,6 +45,12 @@ What it accomplishes:
 | **Vaultwarden**| `https://vault.lab`                             | via Caddy                    | Bitwarden-compatible secrets vault |
 | **Dozzle**     | `https://logs.lab`                              | via Caddy                    | live Docker log viewer for this stack |
 | **Compiler Explorer** | `https://godbolt.lab`                    | via Caddy                    | [Compiler Explorer](https://github.com/compiler-explorer/compiler-explorer) (Godbolt) — interactive source→asm |
+| **PlantUML**   | `https://plantuml.lab`                          | via Caddy                    | [PlantUML server](https://github.com/plantuml/plantuml-server) — render UML diagrams from text (Graphviz bundled, renders on-box) |
+| **AST Explorer** | `https://ast.lab`                             | via Caddy                    | [AST Explorer](https://github.com/fkling/astexplorer) — parse source into an AST across ~80 parsers, in-browser |
+| **JSON Crack** | `https://jsoncrack.lab`                         | via Caddy                    | [JSON Crack](https://github.com/AykutSarac/jsoncrack.com) — visualize JSON / YAML / CSV / XML as node graphs |
+| **Mermaid Live** | `https://mermaid.lab`                         | via Caddy                    | [Mermaid Live Editor](https://github.com/mermaid-js/mermaid-live-editor) — diagrams-as-code, rendered in-browser |
+| **SQLime**     | `https://sqlime.lab`                            | via Caddy                    | [SQLime](https://github.com/nalgeon/sqlime) — SQLite playground; the engine runs in-browser via WASM |
+| **jq kung fu** | `https://jq.lab`                                | via Caddy                    | [jq kung fu](https://github.com/robertaboukhalil/jqkungfu) — run jq filters in-browser (jq compiled to WASM) |
 | **OpenGrok**   | `https://search.lab`                            | via Caddy                    | source cross-reference + full-text code search over local repos (`./ingest-repos.sh`); read-only, no login |
 | **Code Workspaces** | `https://code.lab`, sessions at `https://<name>.code.lab` | via Caddy        | on-demand [code-server](https://github.com/coder/code-server) sessions — create / open / stop / delete from a tiny UI; baked per-language profiles. **No login** (shared) |
 | **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
@@ -72,12 +79,11 @@ config/               # checked-in config the services read
   filebrowser/        #   settings.json
   nginx/              #   WebDAV nginx config
   session-control/    #   shared session control plane: app.py + code.json + terminal.json
-profiles/             # baked session profiles, by kind (built by build-profiles.sh)
-references/           # offline reference images, one Dockerfile each (built by build-refs.sh)
+images/               # one dir per locally-built image -- Dockerfile (+ build-time conf) -> lab/<name>:latest
 volumes/              # runtime state -- bind mounts, git-ignored, NOT checked in
+dist/                 # build.sh output -- gzipped image tarballs for transfer (git-ignored)
 bootstrap.sh          # post-`up` DNS + CA + Forgejo wiring (idempotent)
-build-profiles.sh     # build the baked session profile images (staging step)
-build-refs.sh         # build the offline reference images (staging step)
+build.sh              # build every images/* + pull prebuilts + save tarballs to dist/ (staging step)
 ingest-repos.sh       # stage source trees into OpenGrok
 test.sh               # end-to-end smoke test of every service
 backup/               # pull-based backup tooling (runs on the backup server)
@@ -94,8 +100,7 @@ and `../volumes/...` references.
 | Script | What it does | When to use |
 |--------|--------------|-------------|
 | `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, creates the Forgejo admin user + public org, and registers the Actions runner. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
-| `build-profiles.sh` | Builds the baked code-server / ttyd session profile images from `profiles/<kind>/<name>/`. Needs internet. | In the provisioning window, and whenever you add or edit a session profile. |
-| `build-refs.sh` | Builds the offline reference images from `references/<name>/Dockerfile` (each downloads/builds its content and serves it) into `lab/<name>:latest`, plus `explainshell` from its upstream prod Dockerfile. Needs internet + docker. | In the provisioning window, and to refresh the references later. |
+| `build.sh` | The staging step: builds every custom image under `images/<name>/` into `lab/<name>:latest`, pulls the pinned prebuilt images the stack references, and saves both groups as gzipped tarballs under `dist/` for transfer (`docker load` on the target). Needs internet + docker. | In the provisioning window, and to refresh images later. |
 | `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `search.lab`. |
 | `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, Forgejo packages, sessions). Exits non-zero on any failure. | After install, a restore, or an image bump. |
 | `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
@@ -156,10 +161,10 @@ sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 
 # (OpenGrok chowns volumes/opengrok/src to uid 1111 on boot, so leave that mount writable —
 #  a :ro src makes the container exit.)
 
-# pull every image + build the local images (needs internet — the air-gap prep window)
-docker compose pull
-./build-refs.sh                           # offline reference images (needs docker)
-./build-profiles.sh                       # session profile images (code: Zig/Python; term: base/netutils)
+# build the custom images + pull the pinned prebuilts (needs internet — the air-gap prep window).
+# build.sh also writes dist/*.tar.gz; for an air-gapped host, run build.sh on an online box, copy
+# dist/ over, and `for f in dist/*.tar.gz; do docker load -i "$f"; done` in place of this line.
+./build.sh
 
 # bring it up and wire DNS + CA + Forgejo (+ register the Actions runner)
 docker compose up -d

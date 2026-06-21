@@ -12,7 +12,7 @@ same app.py with different configs:
 
 It lists, creates, resumes, and deletes per-session containers. Each session gets
 its own subdomain (routed live by caddy-docker-proxy off the labels we set), a
-profile (a pre-built image with a baked toolchain -- see build-profiles.sh), and
+profile (a pre-built image with a baked toolchain -- see build.sh), and
 a persistent bind-mounted directory.
 
 PROFILES

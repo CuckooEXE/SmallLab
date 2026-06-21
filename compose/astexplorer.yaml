@@ -1,0 +1,18 @@
+# AST Explorer -- offline AST explorer (ast.lab). Self-contained image built by ./build.sh.
+# Read-only, no state.
+services:
+  astexplorer:
+    image: lab/astexplorer:latest
+    container_name: astexplorer
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: ast.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: AST Explorer
+      homepage.icon: /icons/astexplorer.svg
+      homepage.href: https://ast.${LAB_DOMAIN}
+      homepage.description: Parse source to an AST (~80 parsers)
+      homepage.weight: "40"

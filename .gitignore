@@ -10,6 +10,9 @@ __pycache__/
 # Never checked in; recreate the skeleton on a fresh host (see the README).
 volumes/
 
+# build.sh output -- gzipped image tarballs staged for transfer to the host.
+dist/
+
 # Homepage shares ONE mount (config/homepage) for both its checked-in config and the
 # files it regenerates on first boot. Track only the files we manage; ignore the rest
 # (custom.css/js, kubernetes.yaml, proxmox.yaml, logs/, and any future skeletons).

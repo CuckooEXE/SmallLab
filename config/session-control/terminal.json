@@ -1,5 +1,5 @@
 {
-  "_comment": "Kind config for terminal.lab, read by the shared session-control app.py. Profiles are PRE-BUILT images (built at staging by build-profiles.sh; run offline thereafter) FROM the ttyd base + baked CLI tools (profiles/term/<name>/Dockerfile). ttyd runs `tmux new -A -s main`, so a second browser tab (or a reconnect) reattaches the SAME tmux session -> shared/pair terminal that survives disconnects. Clients pick a profile by NAME only -- the image string is server-side.",
+  "_comment": "Kind config for terminal.lab, read by the shared session-control app.py. Profiles are PRE-BUILT images (built at staging by build.sh; run offline thereafter) FROM the ttyd base + baked CLI tools (images/term-<name>/Dockerfile). ttyd runs `tmux new -A -s main`, so a second browser tab (or a reconnect) reattaches the SAME tmux session -> shared/pair terminal that survives disconnects. Clients pick a profile by NAME only -- the image string is server-side.",
   "title": "Terminals",
   "tagline": "On-demand browser terminals. No login — everyone shares; a second tab or a reconnect reattaches the same tmux session.",
   "subdomain_base": "terminal",

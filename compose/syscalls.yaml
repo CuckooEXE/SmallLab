@@ -1,6 +1,6 @@
 # Linux Syscall Tables -- offline x86-64 syscall reference (syscalls.lab). Self-contained image
 # built from mebeim/linux-syscalls (Systrack): x86-64 tables by kernel version (v4.0-v6.17) with
-# full signatures -- arg names, C types, and registers. Built by ./build-refs.sh. Read-only, no state.
+# full signatures -- arg names, C types, and registers. Built by ./build.sh. Read-only, no state.
 services:
   syscalls:
     image: lab/syscalls:latest

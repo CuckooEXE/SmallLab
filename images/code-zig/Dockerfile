@@ -1,13 +1,12 @@
 # Zig workspace profile -- code-server + Zig toolchain + ZLS + the Zig extension.
 #
-# Built at staging (needs internet) by ../../build-profiles.sh; referenced offline
-# thereafter by the control plane (config/session-control/code.json -> lab/code-zig).
+# Built at staging (needs internet) by ../build.sh; referenced offline thereafter by the
+# control plane (config/session-control/code.json -> lab/code-zig).
 #
 # ZLS is built FROM SOURCE with the zig we just installed -- this avoids depending
 # on ZLS release asset URLs (their naming has churned across versions) and keeps the
 # zig/ZLS versions in lockstep.
-ARG BASE=codercom/code-server@sha256:9a7848dd2627158e3873f88bd8743807a4168e4d580f26ec0cbc132a9d9ee78e
-FROM ${BASE}
+FROM codercom/code-server@sha256:9a7848dd2627158e3873f88bd8743807a4168e4d580f26ec0cbc132a9d9ee78e
 
 # Keep these in lockstep (ZLS x.y tracks Zig x.y).
 ARG ZIG_VERSION=0.13.0

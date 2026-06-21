@@ -25,7 +25,7 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Restore a snapshot](#restore-a-snapshot)
 - [Enable or disable DHCP](#enable-or-disable-dhcp)
 - [Index code in OpenGrok](#index-code-in-opengrok)
-- [Rebuild reference images](#rebuild-reference-images)
+- [Rebuild images](#rebuild-images)
 - [Smoke-test and health](#smoke-test-and-health)
 - [Update images and everyday compose](#update-images-and-everyday-compose)
 - [Rename the TLD](#rename-the-tld)
@@ -114,6 +114,9 @@ echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sud
      network, and add `ports: ["${HOST_IP}:<p>:<p>"]`.
    - **Two sites on one container:** use ordinal label groups `caddy_0` / `caddy_1` (see
      `compose/minio.yaml`).
+   - **Building your own image** (not a prebuilt): put the build context in `images/<name>/`
+     (Dockerfile + any build-time conf), set `image: lab/<name>:latest`, and run `./build.sh <name>`
+     — skip the digest-pin step below (it applies only to prebuilt images).
 
 2. Add the file to `include:` in [`compose.yaml`](compose.yaml).
 3. If it has state, create its bind-mount dir: `mkdir -p volumes/<name>` (chown to the image's
@@ -156,12 +159,12 @@ Caddy drops the site and the tile disappears on its own.
 `<kind>` is `code` (FROM code-server) or `term` (FROM ttyd).
 
 ```bash
-# 1. add or edit the Dockerfile (FROM the kind's pinned base; install tools/extensions)
-$EDITOR profiles/<kind>/<name>/Dockerfile
+# 1. add or edit the Dockerfile (FROM the kind's pinned base image; install tools/extensions)
+$EDITOR images/<kind>-<name>/Dockerfile
 # 2. register it (clients pick a profile by NAME only)
 $EDITOR config/session-control/<code|terminal>.json   # "<name>": {"image":"lab/<kind>-<name>:latest", ...}
 # 3. (re)build -- needs internet (apt / toolchain / Open VSX extensions)
-./build-profiles.sh <kind>/<name>          # or `<kind>` for all of a kind; omit for everything
+./build.sh <kind>-<name>                    # rebuild just this image; omit args to build everything
 # 4. pick up the config change without rebuilding the control plane
 docker compose restart code-control        # or term-control
 ```
@@ -444,21 +447,20 @@ boot), take it back first: `sudo chown -R "$USER" volumes/opengrok/src`.
 
 ---
 
-## Rebuild reference images
+## Rebuild images
 
-**Description.** Rebuild the offline reference images (each is a self-contained
-`lab/<name>:latest` from `references/<name>/Dockerfile`).
-**When to use.** Refreshing the offline references, or after editing a reference Dockerfile.
-Needs internet + docker (the build clones/downloads each site's content).
+**Description.** Rebuild the locally-built images (each is a self-contained `lab/<name>:latest`
+from `images/<name>/Dockerfile`). Needs internet + docker (the build clones/downloads content).
 
 ```bash
-./build-refs.sh                 # all of them
-./build-refs.sh payloads x86    # specific ones
+./build.sh                      # build every images/*, pull prebuilts, write dist/*.tar.gz
+./build.sh payloads jsoncrack   # rebuild specific images only (skips pull + bundle)
 docker compose up -d            # pick up the rebuilt images
 ```
 
-Built on a separate box? Carry each image to the host with
-`docker save lab/<name>:latest | ssh <host> docker load`, then `docker compose up -d`.
+Built on a separate box? `./build.sh` writes `dist/lab-images.tar.gz` (custom) and
+`dist/prebuilt-images.tar.gz`; carry them over, `for f in dist/*.tar.gz; do docker load -i "$f"; done`,
+then `docker compose up -d`.
 
 ---
 

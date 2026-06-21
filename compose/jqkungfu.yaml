@@ -1,0 +1,18 @@
+# jq kung fu -- offline jq playground (jq.lab). Self-contained image built by ./build.sh.
+# Read-only, no state.
+services:
+  jqkungfu:
+    image: lab/jqkungfu:latest
+    container_name: jqkungfu
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: jq.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Tools
+      homepage.name: jq kung fu
+      homepage.icon: /icons/jqkungfu.svg
+      homepage.href: https://jq.${LAB_DOMAIN}
+      homepage.description: Run jq filters in-browser (WASM)
+      homepage.weight: "48"

@@ -1,5 +1,5 @@
 {
-  "_comment": "Kind config for code.lab, read by the shared session-control app.py. Profiles are PRE-BUILT images (built at staging by build-profiles.sh; run offline thereafter). 'base' is the upstream code-server pinned by digest; the others are FROM that base + baked toolchain/extensions (profiles/code/<name>/Dockerfile). Clients pick a profile by NAME only -- the image string is server-side. Add a profile: drop profiles/code/<name>/Dockerfile, add an entry here, re-run build-profiles.sh.",
+  "_comment": "Kind config for code.lab, read by the shared session-control app.py. Profiles are PRE-BUILT images (built at staging by build.sh; run offline thereafter). 'base' is the upstream code-server pinned by digest; the others are FROM that base + baked toolchain/extensions (images/code-<name>/Dockerfile). Clients pick a profile by NAME only -- the image string is server-side. Add a profile: drop images/code-<name>/Dockerfile, add an entry here, re-run build.sh.",
   "title": "Code Workspaces",
   "tagline": "On-demand code-server sessions. No login — everyone shares; open a session to pair on it.",
   "subdomain_base": "code",
