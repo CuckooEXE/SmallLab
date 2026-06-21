@@ -82,7 +82,7 @@ mapfile -t prebuilt < <(printf '%s\n' "${prebuilt[@]}" | sort -u)
 
 for img in "${prebuilt[@]}"; do
   log "pulling $img"
-  docker pull -q "$img" >/dev/null && ok "$img" || die "failed to pull $img"
+  if docker pull -q "$img" >/dev/null; then ok "$img"; else die "failed to pull $img"; fi
 done
 
 # 3. save both groups as gzipped tarballs for transfer (docker load reads gzip directly).
@@ -96,4 +96,5 @@ echo
 log "summary"
 ok "custom   : ${#built[@]} images -> $DIST_DIR/lab-images.tar.gz"
 ok "prebuilt : ${#prebuilt[@]} images -> $DIST_DIR/prebuilt-images.tar.gz"
+# shellcheck disable=SC2016  # literal instructions for the operator -- not meant to expand here
 ok 'carry dist/*.tar.gz to the host, then: for f in dist/*.tar.gz; do docker load -i "$f"; done'

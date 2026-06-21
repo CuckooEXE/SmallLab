@@ -1,0 +1,21 @@
+# sist2 -- offline full-text search over the file share (find.lab). Self-contained image built by
+# ./build.sh; indexes ../volumes/share read-only and re-scans hourly. Index persists in volumes/sist2.
+services:
+  sist2:
+    image: lab/sist2:latest
+    container_name: sist2
+    restart: unless-stopped
+    volumes:
+      - ../volumes/share:/share:ro
+      - ../volumes/sist2:/idx
+    networks:
+      - caddy
+    labels:
+      caddy: find.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 4090}}"
+      homepage.group: Storage & Packages
+      homepage.name: sist2
+      homepage.icon: /icons/sist2.svg
+      homepage.href: https://find.${LAB_DOMAIN}
+      homepage.description: Full-text search over the file share
+      homepage.weight: "60"

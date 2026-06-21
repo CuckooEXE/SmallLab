@@ -1,0 +1,29 @@
+# ConvertX -- offline mass file/media converter (convert.lab). Upload files, pick an output format,
+# batch-convert, download; ~1000 formats via engines bundled in the image (ffmpeg, imagemagick,
+# vips, calibre, pandoc, inkscape, poppler, ghostscript, libreoffice, potrace, vtracer, resvg, ...).
+# Open on the trusted LAN (no login). Outputs auto-delete after 24h; SQLite + files persist in
+# volumes/convertx.
+services:
+  convertx:
+    image: ghcr.io/c4illin/convertx@sha256:e1f85be04bbaf8a55ead9261194c3ae0fa0957d303ea537127154860b2552afd  # :v0.17.0 pinned 2026-06
+    container_name: convertx
+    restart: unless-stopped
+    environment:
+      - ALLOW_UNAUTHENTICATED=true       # open on the trusted LAN, no accounts
+      - HTTP_ALLOWED=true                # Caddy terminates TLS and proxies plain HTTP in
+      - AUTO_DELETE_EVERY_N_HOURS=24     # outputs auto-purge after 24h
+      - JWT_SECRET=${CONVERTX_JWT_SECRET:-}   # signs the session cookie; stable across restarts (from .env).
+                                              # Empty -> ConvertX regenerates one each boot, dropping anon sessions.
+    volumes:
+      - ../volumes/convertx:/app/data
+    networks:
+      - caddy
+    labels:
+      caddy: convert.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      homepage.group: Tools
+      homepage.name: ConvertX
+      homepage.icon: /icons/convertx.svg
+      homepage.href: https://convert.${LAB_DOMAIN}
+      homepage.description: Convert files between ~1000 formats
+      homepage.weight: "56"

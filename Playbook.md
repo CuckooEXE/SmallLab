@@ -312,6 +312,10 @@ curl -X MKCOL  https://dav.lab/reports/2027/                      # make a direc
 it with `reg add HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters /v
 AllowInsecureGuestAuth /t REG_DWORD /d 1 /f`.
 
+Full-text search across everything in this tree is at [`find.lab`](https://find.lab) (sist2 —
+content, OCR, thumbnails, type/size/date facets), re-indexed hourly. It's read-only and needs no
+setup; restart the container to index immediately: `docker compose restart sist2`.
+
 ---
 
 ## Issue a cert from the CA
@@ -464,7 +468,7 @@ Technitium. Clients still need to trust the root CA (DHCP can't push it) —
 
 ## Index code in OpenGrok
 
-**Description.** Stage source trees for cross-reference + full-text search at `search.lab`.
+**Description.** Stage source trees for cross-reference + full-text search at `grok.lab`.
 **When to use.** You want to read or grep a codebase in-lab. Fully offline.
 
 ```bash

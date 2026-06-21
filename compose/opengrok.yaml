@@ -1,4 +1,4 @@
-# OpenGrok -- source cross-reference + full-text code search (search.lab). A Tomcat webapp
+# OpenGrok -- source cross-reference + full-text code search (grok.lab). A Tomcat webapp
 # (8080) over a universal-ctags symbol index + Lucene full-text index. Read-only, anonymous.
 # Drop source trees under volumes/opengrok/src/<name> with ./ingest-repos.sh; indexed on
 # startup and every SYNC_PERIOD_MINUTES. Air-gapped: NOMIRROR blocks any pull from an SCM remote.
@@ -25,11 +25,11 @@ services:
       retries: 5
       start_period: 60s   # Tomcat deploy + first index
     labels:
-      caddy: search.${LAB_DOMAIN}
+      caddy: grok.${LAB_DOMAIN}
       caddy.reverse_proxy: "{{upstreams 8080}}"
       homepage.group: Tools
       homepage.name: OpenGrok
       homepage.icon: /icons/opengrok.svg
-      homepage.href: https://search.${LAB_DOMAIN}
+      homepage.href: https://grok.${LAB_DOMAIN}
       homepage.description: Code search & cross-reference
       homepage.weight: "36"

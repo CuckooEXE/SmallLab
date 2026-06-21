@@ -21,8 +21,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 [[ -f .env ]] || { echo "error: .env not found next to test.sh" >&2; exit 1; }
+set -a
 # shellcheck disable=SC1091
-set -a; source ./.env; set +a
+source ./.env
+set +a
 : "${HOST_IP:?HOST_IP must be set in .env}"
 : "${LAB_DOMAIN:?LAB_DOMAIN must be set in .env}"
 
@@ -118,6 +120,20 @@ get_code "HackTricks      hacktricks.${LAB_DOMAIN}"  "hacktricks.${LAB_DOMAIN}" 
 get_code "GTFOBins        gtfobins.${LAB_DOMAIN}"    "gtfobins.${LAB_DOMAIN}"    "/"
 get_code "LOLBAS          lolbas.${LAB_DOMAIN}"      "lolbas.${LAB_DOMAIN}"      "/"
 get_code "PayloadsAllTheThings payloads.${LAB_DOMAIN}" "payloads.${LAB_DOMAIN}" "/"
+
+# Interactive programming tools + services. Built images (lab/<name>) come from ./build.sh; the
+# rest are pinned upstream images -- all 200 once present on the host.
+get_code "OpenGrok        grok.${LAB_DOMAIN}"        "grok.${LAB_DOMAIN}"        "/"
+get_code "PlantUML        plantuml.${LAB_DOMAIN}"    "plantuml.${LAB_DOMAIN}"    "/"
+get_code "AST Explorer    ast.${LAB_DOMAIN}"         "ast.${LAB_DOMAIN}"         "/"
+get_code "JSON Crack      jsoncrack.${LAB_DOMAIN}"   "jsoncrack.${LAB_DOMAIN}"   "/"
+get_code "Mermaid Live    mermaid.${LAB_DOMAIN}"     "mermaid.${LAB_DOMAIN}"     "/"
+get_code "SQLime          sqlime.${LAB_DOMAIN}"      "sqlime.${LAB_DOMAIN}"      "/"
+get_code "jq kung fu      jq.${LAB_DOMAIN}"          "jq.${LAB_DOMAIN}"          "/"
+get_code "LibreTranslate  translate.${LAB_DOMAIN}"   "translate.${LAB_DOMAIN}"   "/"
+get_code "Stirling-PDF    pdf.${LAB_DOMAIN}"         "pdf.${LAB_DOMAIN}"         "/"
+get_code "ConvertX        convert.${LAB_DOMAIN}"     "convert.${LAB_DOMAIN}"     "/"
+get_code "sist2 search    find.${LAB_DOMAIN}"        "find.${LAB_DOMAIN}"        "/"
 
 section "step-ca (ACME CA)"
 body="$(curl -sS --max-time 15 --resolve "ca.${LAB_DOMAIN}:9000:${HOST_IP}" --cacert "$CA" "https://ca.${LAB_DOMAIN}:9000/health" 2>/dev/null)"

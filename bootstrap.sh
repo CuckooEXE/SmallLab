@@ -25,8 +25,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 [[ -f .env ]] || { echo "error: .env not found next to bootstrap.sh" >&2; exit 1; }
+set -a
 # shellcheck disable=SC1091
-set -a; source ./.env; set +a
+source ./.env
+set +a
 
 : "${HOST_IP:?HOST_IP must be set in .env}"
 : "${LAB_DOMAIN:?LAB_DOMAIN must be set in .env}"
@@ -343,7 +345,7 @@ log "configuring the Forgejo Actions runner"
 setup_forgejo_runner \
   || warn "Forgejo runner setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
-# OpenGrok (search.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
+# OpenGrok (grok.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
 # every SYNC_PERIOD_MINUTES. Stage code with ./ingest-repos.sh.
 
 # Print the client-side setup instructions.

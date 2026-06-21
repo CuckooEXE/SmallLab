@@ -1,0 +1,20 @@
+# LibreTranslate -- offline machine translation API + web UI (translate.lab). Self-contained image
+# built by ./build.sh with language models baked in. Open on the LAN (no API key). Read-only, no state.
+services:
+  libretranslate:
+    image: lab/libretranslate:latest
+    container_name: libretranslate
+    restart: unless-stopped
+    environment:
+      - LT_LOAD_ONLY=en,es,fr,de
+    networks:
+      - caddy
+    labels:
+      caddy: translate.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 5000}}"
+      homepage.group: Tools
+      homepage.name: LibreTranslate
+      homepage.icon: /icons/libretranslate.svg
+      homepage.href: https://translate.${LAB_DOMAIN}
+      homepage.description: Offline machine translation
+      homepage.weight: "52"

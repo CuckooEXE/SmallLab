@@ -29,11 +29,15 @@ include:
   - compose/code-control.yaml
   - compose/term-control.yaml
   - compose/opengrok.yaml
+  - compose/sist2.yaml
   - compose/astexplorer.yaml
   - compose/jsoncrack.yaml
   - compose/mermaid.yaml
   - compose/sqlime.yaml
   - compose/jqkungfu.yaml
+  - compose/libretranslate.yaml
+  - compose/stirling-pdf.yaml
+  - compose/convertx.yaml
   - compose/cppreference.yaml
   - compose/x86.yaml
   - compose/tldr.yaml

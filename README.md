@@ -37,6 +37,7 @@ What it accomplishes:
 | **Samba**      | `\\files.lab\lab`                               | `445/tcp`, `139/tcp`         | SMB share, **passwordless guest access** (no auth) |
 | **Filebrowser**| `https://files.lab`                             | via Caddy                    | web face for the same share, **no login** (noauth) |
 | **WebDAV**     | `https://dav.lab`                               | via Caddy                    | curl `GET`/`PUT`/`DELETE` to the same share (no auth) |
+| **sist2**      | `https://find.lab`                              | via Caddy                    | full-text search over the file share — [sist2](https://github.com/sist2app/sist2) (SQLite/FTS5), re-indexed hourly; thumbnails, OCR, type/size/date facets |
 | **CyberChef**  | `https://cyberchef.lab`                         | via Caddy                    | offline data-mangling swiss army knife |
 | **IT-Tools**   | `https://tools.lab`                             | via Caddy                    | offline dev / crypto / network utilities |
 | **DevDocs**    | `https://devdocs.lab`                           | via Caddy                    | offline API docs browser — Python, C, Linux man pages, hundreds more (baked into the image) |
@@ -51,7 +52,10 @@ What it accomplishes:
 | **Mermaid Live** | `https://mermaid.lab`                         | via Caddy                    | [Mermaid Live Editor](https://github.com/mermaid-js/mermaid-live-editor) — diagrams-as-code, rendered in-browser |
 | **SQLime**     | `https://sqlime.lab`                            | via Caddy                    | [SQLime](https://github.com/nalgeon/sqlime) — SQLite playground; the engine runs in-browser via WASM |
 | **jq kung fu** | `https://jq.lab`                                | via Caddy                    | [jq kung fu](https://github.com/robertaboukhalil/jqkungfu) — run jq filters in-browser (jq compiled to WASM) |
-| **OpenGrok**   | `https://search.lab`                            | via Caddy                    | source cross-reference + full-text code search over local repos (`./ingest-repos.sh`); read-only, no login |
+| **LibreTranslate** | `https://translate.lab`                     | via Caddy                    | [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) — offline machine translation (API + UI); language models baked into the image |
+| **Stirling-PDF** | `https://pdf.lab`                             | via Caddy                    | [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) — upload a PDF → OCR → extract text, plus a full PDF toolbox; telemetry off |
+| **ConvertX**   | `https://convert.lab`                           | via Caddy                    | [ConvertX](https://github.com/C4illin/ConvertX) — convert files between ~1000 formats (images / docs / audio / video); batch upload, no login |
+| **OpenGrok**   | `https://grok.lab`                              | via Caddy                    | source cross-reference + full-text code search over local repos (`./ingest-repos.sh`); read-only, no login |
 | **Code Workspaces** | `https://code.lab`, sessions at `https://<name>.code.lab` | via Caddy        | on-demand [code-server](https://github.com/coder/code-server) sessions — create / open / stop / delete from a tiny UI; baked per-language profiles. **No login** (shared) |
 | **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
@@ -101,7 +105,7 @@ and `../volumes/...` references.
 |--------|--------------|-------------|
 | `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, creates the Forgejo admin user + public org, and registers the Actions runner. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
 | `build.sh` | The staging step: builds every custom image under `images/<name>/` into `lab/<name>:latest`, pulls the pinned prebuilt images the stack references, and saves both groups as gzipped tarballs under `dist/` for transfer (`docker load` on the target). Needs internet + docker. | In the provisioning window, and to refresh images later. |
-| `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `search.lab`. |
+| `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `grok.lab`. |
 | `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, Forgejo packages, sessions). Exits non-zero on any failure. | After install, a restore, or an image bump. |
 | `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
 | `backup/lab-restore.sh` | Lists snapshots and restores one into a host's `volumes/`. | Disaster recovery or seeding a new host. |
@@ -152,7 +156,7 @@ $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, se
                                           # (getent group docker | cut -d: -f3)
 
 # runtime dirs (bind mounts, git-ignored); a few need specific ownership
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
 sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000

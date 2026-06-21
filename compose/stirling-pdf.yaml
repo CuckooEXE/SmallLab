@@ -1,0 +1,28 @@
+# Stirling-PDF -- offline PDF toolbox: upload a PDF, OCR it, extract text (pdf.lab). Telemetry and
+# login are disabled; default Tesseract langs (eng/deu/fra/por/chi_sim) ship in the image. Stateless
+# (config is via env), so no volume. To OCR other languages, build a lab/ image FROM this that
+# apt-installs the extra tesseract-ocr-<lang> packages.
+services:
+  stirling-pdf:
+    image: stirlingtools/stirling-pdf@sha256:d5ff678ecacdb26b4b7892534540de64a04458b8aaa0a4f9daf2852221646f71  # :latest (2.x) pinned 2026-06
+    container_name: stirling-pdf
+    restart: unless-stopped
+    environment:
+      - SYSTEM_ENABLEANALYTICS=false
+      - SYSTEM_ENABLESCARF=false
+      - SYSTEM_ENABLEPOSTHOG=false
+      - DISABLE_ADDITIONAL_FEATURES=true
+      - SECURITY_ENABLELOGIN=false
+      - METRICS_ENABLED=false
+      - SHOW_SURVEY=false
+    networks:
+      - caddy
+    labels:
+      caddy: pdf.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      homepage.group: Tools
+      homepage.name: Stirling-PDF
+      homepage.icon: /icons/stirling-pdf.svg
+      homepage.href: https://pdf.${LAB_DOMAIN}
+      homepage.description: PDF toolbox -- OCR & extract text
+      homepage.weight: "54"
