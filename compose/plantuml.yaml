@@ -2,7 +2,7 @@
 # (Graphviz + fonts bundled in the image); SANDBOX blocks diagram-driven network includes.
 services:
   plantuml:
-    image: plantuml/plantuml-server@sha256:5b9968b8723e03ef585396b257127337ca5f91e58ccbffc88f085bd649a717dc  # :jetty pinned 2026-06
+    image: plantuml/plantuml-server:jetty
     container_name: plantuml
     restart: unless-stopped
     environment:

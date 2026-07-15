@@ -16,4 +16,4 @@ services:
       homepage.icon: /icons/payloads.svg
       homepage.href: https://payloads.${LAB_DOMAIN}
       homepage.description: Payloads & techniques by class
-      homepage.weight: "37"
+      homepage.weight: "38"

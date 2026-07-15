@@ -1,0 +1,132 @@
+# Ollama -- local LLM runtime (ollama.lab API + Open WebUI at ai.lab). OPT-IN and heavy: gated
+# behind per-accelerator compose profiles, so a plain `docker compose up -d` never starts it.
+# Pick EXACTLY ONE accelerator profile to bring the stack up:
+#   docker compose --profile ai-cpu    up -d   # CPU only -- works on any host, no drivers
+#   docker compose --profile ai-nvidia up -d   # NVIDIA (CUDA) -- needs the NVIDIA Container Toolkit
+#   docker compose --profile ai-amd    up -d   # AMD (ROCm)    -- needs /dev/kfd + amdgpu on the host
+#   docker compose --profile ai-intel  up -d   # Intel (experimental, IPEX-LLM) -- needs /dev/dri
+#
+# DRIVERS ARE NOT IN THE IMAGE. A GPU's kernel driver lives on the HOST; the image only carries
+# the userspace runtime (CUDA/ROCm/oneAPI). Run ./gpu-setup.sh on a fresh server to detect the
+# GPU and install the right host stack -- see Playbook -> "Run local LLMs (Ollama)".
+#
+# All four accelerator variants share ONE model volume (../volumes/ollama) and answer to the
+# network alias `ollama`, so Open WebUI and Caddy reach whichever one is running at the same
+# name, and pulled models persist no matter which accelerator you switch to.
+
+# Common config shared by every Ollama variant (the accelerator-specific bits are added below).
+x-ollama-base: &ollama-base
+  image: ollama/ollama:0.32.0
+  restart: unless-stopped
+  environment: &ollama-env
+    - OLLAMA_HOST=0.0.0.0:11434    # bind all interfaces (default is loopback -> unreachable from Caddy)
+    - OLLAMA_KEEP_ALIVE=5m         # unload an idle model after 5 min to free RAM/VRAM
+  volumes:
+    - ../volumes/ollama:/root/.ollama
+  networks:
+    caddy:
+      aliases: [ollama]            # every variant is reachable at http://ollama:11434
+  labels: &ollama-labels
+    caddy: ollama.${LAB_DOMAIN}
+    caddy.reverse_proxy: "{{upstreams 11434}}"
+    homepage.group: AI
+    homepage.name: Ollama
+    homepage.icon: /icons/ollama.svg
+    homepage.href: https://ollama.${LAB_DOMAIN}
+    homepage.description: Local LLM runtime (API)
+    homepage.weight: "10"
+
+services:
+  # --- CPU: no accelerator, works everywhere with zero host setup -----------------------------
+  ollama-cpu:
+    <<: *ollama-base
+    container_name: ollama
+    profiles: [ai-cpu]
+
+  # --- NVIDIA (CUDA): host needs the proprietary driver + NVIDIA Container Toolkit ------------
+  ollama-nvidia:
+    <<: *ollama-base
+    container_name: ollama
+    profiles: [ai-nvidia]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # --- AMD (ROCm): the -rocm image + direct device passthrough --------------------------------
+  ollama-amd:
+    <<: *ollama-base
+    image: ollama/ollama:0.32.0-rocm
+    container_name: ollama
+    profiles: [ai-amd]
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    # Consumer cards whose gfx target Ollama doesn't ship may need an override, e.g. a RX 6700 XT
+    # (gfx1031) masquerading as gfx1030. If Ollama falls back to CPU, uncomment and set yours:
+    # environment:
+    #   - OLLAMA_HOST=0.0.0.0:11434
+    #   - HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+  # --- Intel (EXPERIMENTAL): mainline Ollama has no Intel GPU backend, so this uses Intel's
+  #     IPEX-LLM build instead. Different image, different bootstrap, lags mainline. The command
+  #     sources IPEX-LLM's init then launches `ollama serve`; verify it against the current
+  #     IPEX-LLM docs for your image tag, as its entrypoint has churned across releases.
+  ollama-intel:
+    image: intelanalytics/ipex-llm-inference-cpp-xpu:2.2.0b20250101
+    container_name: ollama
+    restart: unless-stopped
+    profiles: [ai-intel]
+    devices:
+      - /dev/dri
+    shm_size: 16g
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=5m
+      - no_proxy=localhost,127.0.0.1
+      - ZES_ENABLE_SYSMAN=1          # let the runtime read Intel GPU telemetry
+      - DEVICE=Arc                   # set iGPU for integrated graphics; Arc for discrete
+    volumes:
+      - ../volumes/ollama:/root/.ollama
+    networks:
+      caddy:
+        aliases: [ollama]
+    command:
+      - /bin/bash
+      - -c
+      - 'cd /llm/scripts && source ipex-llm-init --gpu --device $${DEVICE} && bash start-ollama.sh && tail -f /dev/null'
+    labels:
+      <<: *ollama-labels
+      homepage.description: Local LLM runtime (Intel, experimental)
+
+  # --- Open WebUI: browser chat + model management, talks to whichever Ollama variant is up.
+  #     Rides along with every accelerator profile (started with any single ai-* profile).
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.10.2
+    container_name: open-webui
+    restart: unless-stopped
+    profiles: [ai-cpu, ai-nvidia, ai-amd, ai-intel]
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=false             # no-login, LAN-trust posture like the rest of the lab
+      - ENABLE_OPENAI_API=false      # air-gap: no outbound calls to OpenAI-compatible endpoints
+      - HF_HUB_OFFLINE=1             # don't reach HuggingFace for embedding models
+    volumes:
+      - ../volumes/open-webui:/app/backend/data
+    networks:
+      - caddy
+    labels:
+      caddy: ai.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      homepage.group: AI
+      homepage.name: Open WebUI
+      homepage.icon: /icons/open-webui.png
+      homepage.href: https://ai.${LAB_DOMAIN}
+      homepage.description: LLM chat + model management
+      homepage.weight: "11"

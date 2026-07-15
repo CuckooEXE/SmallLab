@@ -1,0 +1,66 @@
+# Mattermost -- team chat (chat.lab). OPT-IN: gated behind the "full-lab" compose profile,
+# alongside GitLab:
+#   docker compose --profile full-lab up -d
+# Team Edition plus a PostgreSQL sidecar (mattermost-db -- no labels, so Caddy never proxies
+# it; it only serves mattermost over the internal network). bootstrap.sh seeds the admin
+# (LAB_USER) and a default team via mmctl over the local socket (ENABLELOCALMODE below).
+services:
+  mattermost:
+    image: mattermost/mattermost-team-edition:11.9.0
+    container_name: mattermost
+    restart: unless-stopped
+    profiles: [full-lab]
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    environment:
+      - MM_SERVICESETTINGS_SITEURL=https://chat.${LAB_DOMAIN}
+      - MM_SQLSETTINGS_DRIVERNAME=postgres
+      # NOTE: LAB_PASSWORD is spliced into this URL -- reserved URL chars (@ / : ? #) in it
+      # would need percent-encoding here AND in mattermost-db's POSTGRES_PASSWORD.
+      - MM_SQLSETTINGS_DATASOURCE=postgres://mmuser:${LAB_PASSWORD}@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
+      - MM_SERVICESETTINGS_ENABLELOCALMODE=true      # bootstrap.sh drives mmctl --local through this
+      - MM_PLUGINSETTINGS_ENABLEMARKETPLACE=false    # air-gap: no upstream marketplace calls
+    volumes:
+      - ../volumes/mattermost/config:/mattermost/config
+      - ../volumes/mattermost/data:/mattermost/data
+      - ../volumes/mattermost/logs:/mattermost/logs
+      - ../volumes/mattermost/plugins:/mattermost/plugins
+      - ../volumes/mattermost/client-plugins:/mattermost/client/plugins
+      - ../volumes/mattermost/bleve-indexes:/mattermost/bleve-indexes
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8065/api/v4/system/ping | grep -q OK"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    labels:
+      caddy: chat.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8065}}"
+      homepage.group: Collaboration
+      homepage.name: Mattermost
+      homepage.icon: /icons/mattermost.svg
+      homepage.href: https://chat.${LAB_DOMAIN}
+      homepage.description: Team chat
+      homepage.weight: "20"
+
+  mattermost-db:
+    image: postgres:16.14-alpine
+    container_name: mattermost-db
+    restart: unless-stopped
+    profiles: [full-lab]
+    environment:
+      - POSTGRES_USER=mmuser
+      - POSTGRES_PASSWORD=${LAB_PASSWORD}
+      - POSTGRES_DB=mattermost
+    volumes:
+      - ../volumes/mattermost-db:/var/lib/postgresql/data
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

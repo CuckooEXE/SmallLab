@@ -4,7 +4,7 @@
 # host clock (no SYS_TIME) -- keep the host clock correct and the LAN inherits it.
 services:
   ntp:
-    image: cturra/ntp@sha256:7224d4e7c7833aabbcb7dd70c46c8a8dcccda365314c6db047b9b10403ace3bc  # :latest pinned 2026-06
+    image: cturra/ntp:latest
     container_name: ntp
     hostname: ntp
     restart: unless-stopped

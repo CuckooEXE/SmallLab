@@ -20,8 +20,7 @@ RUN npm install --no-save ace-builds@1.4.2 bootstrap@4.3.1 \
  && cp -r node_modules/ace-builds/src-min-noconflict/. ace/ \
  && cp node_modules/bootstrap/dist/css/bootstrap.min.css bootstrap.min.css
 
-# nginx:1.27-alpine
-FROM nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+FROM nginx:1.27-alpine
 COPY --from=jq     /src/index.html      /usr/share/nginx/html/index.html
 COPY --from=jq     /src/build           /usr/share/nginx/html/build
 COPY --from=vendor /v/ace               /usr/share/nginx/html/vendor/ace

@@ -7,17 +7,17 @@ plain, browsable copy; recovery is one rsync back, then `docker compose up`.
 
 ```
 DEST/
-  20260619T000000/   caddy/  stepca/  technitium/  forgejo/  minio/  share/  ...
+  20260619T000000/   caddy/  stepca/  technitium/  gitlab/  minio/  share/  ...
   20260619T030000/   (unchanged files hardlinked to 00:00; only deltas are new)
   latest -> 20260619T030000
 ```
 
 ## How it works
 
-- **Hot by default.** Containers are never touched. A DB written mid-copy (Forgejo's SQLite,
-  filebrowser's BoltDB, step-ca's badger store) could be copied torn; these LAN services are
-  near-idle, so the risk is small. Set `PAUSE_CONTAINERS=1` for a guaranteed copy — it briefly
-  `docker pause`s the stack (a cgroup freeze, not a stop/restart).
+- **Hot by default.** Containers are never touched. A DB written mid-copy (GitLab's or
+  Mattermost's Postgres, filebrowser's BoltDB, step-ca's badger store) could be copied torn;
+  these LAN services are near-idle, so the risk is small. Set `PAUSE_CONTAINERS=1` for a
+  guaranteed copy — it briefly `docker pause`s the stack (a cgroup freeze, not a stop/restart).
 - **Retention.** Keeps the snapshot nearest each of: 3h, 6h, 12h, 18h, 1d, 2d, 3d, 4d, 5d, 1w,
   2w, 4w, 1mo, 3mo; deletes the rest; hard-deletes anything older than 3 months. Edit
   `KEEP_AGES` in `lab-backup.sh` to change it.
@@ -26,7 +26,7 @@ DEST/
 
 ## What's backed up
 
-Just `volumes/` — every service's runtime state (step-ca's PKI, Forgejo's data + package store,
+Just `volumes/` — every service's runtime state (step-ca's PKI, GitLab's and Mattermost's data,
 MinIO objects, the file share, the embedded DBs). Everything else is reproducible from git.
 `.env` and `lab-root-ca.crt` are neither volumes nor in git — keep them in a password manager.
 

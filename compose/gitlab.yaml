@@ -1,0 +1,47 @@
+# GitLab CE -- full DevOps forge (gitlab.lab): git repos, issues, wiki, CI/CD, and the built-in
+# package registries (PyPI, npm, Maven, ... on the same vhost). OPT-IN: gated behind the
+# "full-lab" compose profile (it wants ~4 GB RAM and takes minutes on first boot):
+#   docker compose --profile full-lab up -d
+# Caddy terminates TLS; GitLab's bundled nginx listens on plain :80 inside. The admin login is
+# the FIXED username `root` with LAB_PASSWORD -- seeded on FIRST boot only (initial_root_password
+# is ignored once the database exists; change it in the UI afterward and mirror it in .env).
+# No git-over-ssh port is published -- clone over HTTPS (same posture as the rest of the lab).
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.1.2-ce.0
+    container_name: gitlab
+    restart: unless-stopped
+    profiles: [full-lab]
+    shm_size: 256m              # the bundled postgres needs more than the 64m docker default
+    environment:
+      # NOTE: LAB_PASSWORD lands inside a Ruby single-quoted string -- avoid ' in it.
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'https://gitlab.${LAB_DOMAIN}'
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        letsencrypt['enable'] = false
+        gitlab_rails['initial_root_password'] = '${LAB_PASSWORD}'
+        gitlab_rails['gitlab_signup_enabled'] = false
+        # Small-lab tuning: single Puma tree, lean Sidekiq, no bundled Prometheus stack.
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 10
+        prometheus_monitoring['enable'] = false
+        # Container registry stays off (the package registries above need no extra config).
+        # To enable it, set registry_external_url + a second caddy_1 label group -> port 5000.
+    volumes:
+      - ../volumes/gitlab/config:/etc/gitlab
+      - ../volumes/gitlab/logs:/var/log/gitlab
+      - ../volumes/gitlab/data:/var/opt/gitlab
+    networks:
+      - caddy
+    # The image ships its own HEALTHCHECK (gitlab-healthcheck); no override needed. Expect
+    # `starting` for several minutes on first boot while migrations run.
+    labels:
+      caddy: gitlab.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Collaboration
+      homepage.name: GitLab
+      homepage.icon: /icons/gitlab.svg
+      homepage.href: https://gitlab.${LAB_DOMAIN}
+      homepage.description: DevOps forge -- repos, CI/CD, packages
+      homepage.weight: "10"

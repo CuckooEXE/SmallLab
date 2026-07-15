@@ -17,4 +17,4 @@ services:
       homepage.icon: /icons/explainshell.svg
       homepage.href: https://explainshell.${LAB_DOMAIN}
       homepage.description: Explain shell commands from man pages
-      homepage.weight: "40"   # after devhints (39); the rest of Reference is 30-39
+      homepage.weight: "41"   # after devhints (39); the rest of Reference is 30-39

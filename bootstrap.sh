@@ -12,12 +12,13 @@
 #   7. restarts Caddy so it issues certs now that DNS + CA are ready
 #   8. teaches vaultwarden (system store) to trust the lab root CA, so its OUTBOUND HTTPS
 #      to *.${LAB_DOMAIN} verifies instead of erroring
-#   9. configures Forgejo: creates the admin user and a PUBLIC packages org (named after
-#      ${LAB_DOMAIN}) so package paths read packages.<dom>/<org>/...
+#   9. if the full-lab profile is up: seeds the Mattermost admin (LAB_USER) and a default
+#      team via mmctl. (GitLab needs no bootstrap -- it seeds root's password from .env on
+#      first boot.)
 #
-# Everything is driven by curl against the Technitium and Forgejo APIs (plus one
-# `forgejo admin user create` exec). Idempotent: re-running overwrites the A records,
-# no-ops the zone create, and leaves an existing Technitium/Forgejo user or org untouched.
+# Everything is driven by curl against the Technitium API plus a few `docker compose exec`
+# calls. Idempotent: re-running overwrites the A records, no-ops the zone create, and leaves
+# an existing Technitium/Mattermost user or team untouched.
 #
 set -euo pipefail
 
@@ -34,11 +35,6 @@ set +a
 : "${LAB_DOMAIN:?LAB_DOMAIN must be set in .env}"
 : "${LAB_USER:?LAB_USER must be set in .env}"
 : "${LAB_PASSWORD:?LAB_PASSWORD must be set in .env}"
-
-# Forgejo packages org. Defaults to ${LAB_DOMAIN}, so package paths read
-# packages.<dom>/<org>/... The Forgejo admin login is the shared LAB_USER / LAB_PASSWORD.
-FORGEJO_ORG="${FORGEJO_ORG:-$LAB_DOMAIN}"
-FORGEJO_WAIT_RETRIES="${FORGEJO_WAIT_RETRIES:-60}"   # readiness poll: this many x 3s (~3 min) for first boot
 
 TECH="http://127.0.0.1:5380"            # Technitium API, published on loopback
 CA_OUT="$SCRIPT_DIR/lab-root-ca.crt"    # step-ca's root -> the CA clients must trust
@@ -137,7 +133,7 @@ add_a() {
   ok "A  $name -> $ip"
 }
 log "writing A records -> $HOST_IP"
-add_a "*.$LAB_DOMAIN" "$HOST_IP"        # wildcard covers home.lab, dns.lab, packages.lab, ...
+add_a "*.$LAB_DOMAIN" "$HOST_IP"        # wildcard covers home.lab, dns.lab, gitlab.lab, ...
 add_a "$LAB_DOMAIN"   "$HOST_IP"        # apex, for bare \\lab style references
 # Per-session subdomains for the on-demand session control planes. These live one label
 # deeper than the stack, which the *.lab wildcard above doesn't reach (it matches one label).
@@ -216,134 +212,57 @@ trust_lab_ca() {
 log "teaching vaultwarden to trust the lab CA"
 trust_lab_ca
 
-# setup_forgejo -- create the Forgejo admin user (CLI, inside the container) and a PUBLIC org
-# named ${FORGEJO_ORG} (REST API) whose packages are anonymously pullable. Idempotent: an
-# existing user/org is left untouched. Soft-fails so a hiccup never wedges the rest of bootstrap.
-setup_forgejo() {
-  local host="packages.${LAB_DOMAIN}"
-  local base="https://${host}/api/v1"
-  local org="$FORGEJO_ORG"
-  local email="${LAB_USER}@${host}"
+# setup_mattermost -- seed the Mattermost admin (LAB_USER) and a default team (named after
+# ${LAB_DOMAIN}) via mmctl over the container's local socket (MM_SERVICESETTINGS_ENABLELOCALMODE).
+# Runs only when the full-lab profile is up; idempotent (an existing user/team is left
+# untouched). GitLab needs no counterpart here: it seeds root's password from .env on first
+# boot, and its admin username is the fixed `root`.
+setup_mattermost() {
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx mattermost \
+    || { ok "full-lab profile not running -- skipping (enable: docker compose --profile full-lab up -d)"; return 0; }
 
-  # curl bound to the vhost (the host's resolver may not point at Technitium) + lab CA.
-  local -a fc=(curl -sS --max-time 20 --resolve "${host}:443:${HOST_IP}"
-               -u "${LAB_USER}:${LAB_PASSWORD}")
-  if [[ -s "$CA_OUT" ]]; then
-    fc+=(--cacert "$CA_OUT")
-  else
-    warn "lab CA ($CA_OUT) missing -- contacting Forgejo without TLS verification"
-    fc+=(--insecure)
-  fi
+  local -a mm=(docker compose --profile full-lab exec -T mattermost mmctl --local)
+  local team="$LAB_DOMAIN"
 
-  # Wait for the HTTP API to report healthy.
-  log "waiting for Forgejo at https://${host}"
+  # Wait for the server (the local socket answers only once Mattermost is fully up).
+  log "waiting for Mattermost's local socket"
   local i ready=0
-  for i in $(seq 1 "$FORGEJO_WAIT_RETRIES"); do
-    if "${fc[@]}" "https://${host}/api/healthz" 2>/dev/null | grep -q '"status": *"pass"'; then
-      ok "Forgejo is responding"; ready=1; break
-    fi
+  for i in $(seq 1 30); do
+    if "${mm[@]}" system version >/dev/null 2>&1; then ok "Mattermost is responding"; ready=1; break; fi
     sleep 3
   done
-  [[ "$ready" == 1 ]] || { warn "Forgejo never became ready. Check 'docker compose ps forgejo',
+  [[ "$ready" == 1 ]] || { warn "Mattermost never became ready. Check 'docker compose ps mattermost',
         then re-run ./bootstrap.sh (it's idempotent)."; return 1; }
 
-  # Ensure the admin user (CLI, inside the container).
-  log "ensuring Forgejo admin '$LAB_USER'"
+  # Ensure the admin user.
+  log "ensuring Mattermost admin '$LAB_USER'"
   local out
-  if out="$(docker compose exec -T --user git forgejo forgejo admin user create \
-        --admin --username "$LAB_USER" --password "$LAB_PASSWORD" \
-        --email "$email" --must-change-password=false 2>&1)"; then
+  if out="$("${mm[@]}" user create --email "${LAB_USER}@chat.${LAB_DOMAIN}" \
+        --username "$LAB_USER" --password "$LAB_PASSWORD" \
+        --system-admin --email-verified 2>&1)"; then
     ok "admin user created"
-  elif grep -qiE 'already exist' <<<"$out"; then
+  elif grep -qi 'exists' <<<"$out"; then
     ok "admin user already exists"
   else
     warn "could not create admin user: $out"; return 1
   fi
 
-  # Ensure the public packages org.
-  log "ensuring public org '$org'"
-  local code
-  code="$("${fc[@]}" -o /dev/null -w '%{http_code}' "${base}/orgs/${org}")"
-  if [[ "$code" == 200 ]]; then
-    ok "org '$org' already exists"
+  # Ensure the default team and put the admin in it.
+  log "ensuring team '$team'"
+  if out="$("${mm[@]}" team create --name "$team" --display-name "$team" 2>&1)"; then
+    ok "team '$team' created"
+  elif grep -qi 'exists' <<<"$out"; then
+    ok "team '$team' already exists"
   else
-    code="$("${fc[@]}" -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            --data "$(jq -nc --arg n "$org" '{username:$n, visibility:"public"}')" "${base}/orgs")"
-    if [[ "$code" == 2?? ]]; then
-      ok "org '$org' created (public)"
-    else
-      warn "creating org '$org' failed (HTTP $code)"; return 1
-    fi
+    warn "could not create team '$team': $out"; return 1
   fi
+  "${mm[@]}" team users add "$team" "$LAB_USER" >/dev/null 2>&1 || true
 
-  ok "Forgejo configured: admin '$LAB_USER', public org '$org'"
+  ok "Mattermost configured: admin '$LAB_USER', team '$team'"
 }
-
-log "configuring Forgejo (admin user + packages org)"
-setup_forgejo \
-  || warn "Forgejo auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
-
-# setup_forgejo_runner -- register the Forgejo Actions runner using a 40-hex shared secret.
-# All runner-volume access goes through `docker compose exec` (as the container's uid 1000),
-# since the host user can't write into that dir directly. Idempotent + soft-failing: an
-# already-registered runner is left alone; otherwise the secret is generated once, persisted
-# in the data volume, and reused on every re-run (a fresh secret would register a second
-# runner, since the secret's first 16 hex are its identity).
-setup_forgejo_runner() {
-  local name="lab-runner"
-
-  # already registered? (.runner lives in the runner's data volume, written by the container)
-  if docker compose exec -T forgejo-runner test -s /data/.runner 2>/dev/null; then
-    ok "runner already registered (/data/.runner present)"; return 0
-  fi
-
-  # 1. shared secret: reuse the persisted one, else generate on the host (openssl) and persist
-  #    it INTO the data volume via the container (umask 077 -> mode 600, owned by uid 1000).
-  # `|| true` INSIDE the container: a missing /data/secret (the normal first-run case) must
-  # read as "empty", not as a failure -- otherwise pipefail would propagate cat's non-zero and
-  # we'd bail before generating one. A genuinely-down container makes `exec` itself fail, which
-  # the inner `|| true` can't mask, so the outer `||` still catches that case correctly.
-  local secret
-  secret="$(docker compose exec -T forgejo-runner sh -c 'cat /data/secret 2>/dev/null || true' | tr -d '\r\n')" \
-    || { warn "could not reach the forgejo-runner container (down or crash-looping). Check:
-        docker compose ps forgejo-runner ; docker compose logs --tail=40 forgejo-runner
-   If it loops on a stale registration, clear it and bring it up clean, then re-run bootstrap:
-        sudo rm -f volumes/forgejo-runner/.runner volumes/forgejo-runner/secret
-        docker compose up -d forgejo-runner"; return 1; }
-  if [[ ! "$secret" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    secret="$(openssl rand -hex 20)"
-    if printf '%s' "$secret" | docker compose exec -T forgejo-runner sh -c 'umask 077; cat > /data/secret' 2>/dev/null; then
-      ok "generated runner secret -> volumes/forgejo-runner/secret"
-    else
-      warn "could not write /data/secret in the runner container. volumes/forgejo-runner must be
-        owned by uid 1000 (the runner's user) -- Docker creates it as root if it's missing at
-        first 'up'. Fix on the host, then re-run bootstrap:
-        sudo chown -R 1000:1000 volumes/forgejo-runner"; return 1
-    fi
-  fi
-
-  # 2. Register on the forge (idempotent for a global runner).
-  log "registering Forgejo runner '$name' on the forge"
-  if docker compose exec -T --user git forgejo \
-       forgejo forgejo-cli actions register --name "$name" --secret "$secret" >/dev/null 2>&1; then
-    ok "runner registered on the forge"
-  else
-    warn "could not register the runner (is forgejo up?) -- re-run ./bootstrap.sh"; return 1
-  fi
-
-  # 3. write the runner file on the runner side (creates /data/.runner as uid 1000).
-  log "creating the runner registration file"
-  if docker compose exec -T forgejo-runner \
-       forgejo-runner create-runner-file --instance http://forgejo:3000 \
-         --secret "$secret" --name "$name" --config /data/config.yaml >/dev/null 2>&1; then
-    ok "runner file created -- the daemon will pick up jobs shortly"
-  else
-    warn "could not create the runner file (is the forgejo-runner container up?) -- re-run ./bootstrap.sh"; return 1
-  fi
-}
-log "configuring the Forgejo Actions runner"
-setup_forgejo_runner \
-  || warn "Forgejo runner setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
+log "configuring Mattermost (full-lab profile)"
+setup_mattermost \
+  || warn "Mattermost auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
 # OpenGrok (grok.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
 # every SYNC_PERIOD_MINUTES. Stage code with ./ingest-repos.sh.
@@ -362,16 +281,11 @@ Next steps on each client machine
        macOS : sudo security add-trusted-cert -d -k /Library/Keychains/System.keychain lab-root-ca.crt
        Windows: certutil -addstore -f Root lab-root-ca.crt   (elevated)
 
-  3. Packages -- Forgejo at https://packages.$LAB_DOMAIN (Docker must trust the CA):
-       sudo mkdir -p /etc/docker/certs.d/packages.$LAB_DOMAIN
-       sudo cp lab-root-ca.crt /etc/docker/certs.d/packages.$LAB_DOMAIN/ca.crt
-     A PUBLIC org '$FORGEJO_ORG' was created; anonymous pull/download works now. Push
-     authenticates as the admin (or a token you create in the UI):
-       docker login packages.$LAB_DOMAIN -u $LAB_USER
-       docker tag alpine packages.$LAB_DOMAIN/$FORGEJO_ORG/alpine:latest
-       docker push packages.$LAB_DOMAIN/$FORGEJO_ORG/alpine:latest
-       twine upload --repository-url https://packages.$LAB_DOMAIN/api/packages/$FORGEJO_ORG/pypi -u $LAB_USER dist/*
-     Change the admin password in the UI afterward, and mirror it in .env. See README.
+  3. GitLab & Mattermost (opt-in, heavy) -- start them with:
+       docker compose --profile full-lab up -d && ./bootstrap.sh
+     GitLab:     https://gitlab.$LAB_DOMAIN   (login: root / LAB_PASSWORD; first boot takes minutes)
+     Mattermost: https://chat.$LAB_DOMAIN     (login: $LAB_USER / LAB_PASSWORD)
+     Change both passwords in their UIs afterward, and mirror them in .env. See Playbook.
 
   4. Mount the file share (passwordless / guest):
        Linux  : sudo mount -t cifs //files.$LAB_DOMAIN/lab /mnt/lab -o guest,vers=3.0

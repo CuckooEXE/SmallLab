@@ -11,8 +11,9 @@ include:
   - compose/technitium.yaml
   - compose/ntp.yaml
   - compose/dhcp.yaml
-  - compose/forgejo.yaml
-  - compose/forgejo-runner.yaml
+  - compose/gitlab.yaml
+  - compose/mattermost.yaml
+  - compose/ollama.yaml
   - compose/minio.yaml
   - compose/samba.yaml
   - compose/filebrowser.yaml
@@ -40,6 +41,7 @@ include:
   - compose/convertx.yaml
   - compose/cppreference.yaml
   - compose/x86.yaml
+  - compose/arm.yaml
   - compose/tldr.yaml
   - compose/syscalls.yaml
   - compose/devhints.yaml

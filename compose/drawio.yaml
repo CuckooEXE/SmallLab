@@ -2,7 +2,7 @@
 # Caddy proxies plain 8080 and terminates TLS.
 services:
   drawio:
-    image: jgraph/drawio@sha256:9200b24bea56be5ffbc5b8cdf179fbe92a426d18bf75a53d7a558f3bb940d97f  # 24.04
+    image: jgraph/drawio:30.2.4
     container_name: drawio
     restart: unless-stopped
     networks:

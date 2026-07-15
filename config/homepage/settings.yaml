@@ -4,25 +4,32 @@ color: slate
 headerStyle: clean
 hideVersion: true
 
+# List form pins the group order; every group renders as rows.
 layout:
-  Links:
-    style: row
-    columns: 4
-  Infrastructure:
-    style: row
-    columns: 4
-  Tools:
-    style: row
-    columns: 2
-  Reference:
-    style: row
-    columns: 4
-  Storage & Packages:
-    style: row
-    columns: 4
-  Workspaces:
-    style: row
-    columns: 4
-  Terminals:
-    style: row
-    columns: 4
+  - Links:
+      style: row
+      columns: 4
+  - Infrastructure:
+      style: row
+      columns: 4
+  - Tools:
+      style: row
+      columns: 2
+  - Reference:
+      style: row
+      columns: 4
+  - Storage & Packages:
+      style: row
+      columns: 4
+  - Collaboration:      # GitLab + Mattermost; renders only when --profile full-lab is up
+      style: row
+      columns: 4
+  - AI:                 # Ollama + Open WebUI; renders only under an ai-* profile
+      style: row
+      columns: 4
+  - Workspaces:
+      style: row
+      columns: 4
+  - Terminals:
+      style: row
+      columns: 4

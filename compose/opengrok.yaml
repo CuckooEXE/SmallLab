@@ -4,7 +4,7 @@
 # startup and every SYNC_PERIOD_MINUTES. Air-gapped: NOMIRROR blocks any pull from an SCM remote.
 services:
   opengrok:
-    image: opengrok/docker@sha256:454c9210af6fc24b10d2684fbceef8a10f5f9e70608aa9e292f093396497cf18  # 1.14.15
+    image: opengrok/docker:1.14.15
     container_name: opengrok
     restart: unless-stopped
     environment:

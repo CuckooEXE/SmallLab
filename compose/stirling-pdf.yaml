@@ -4,7 +4,7 @@
 # apt-installs the extra tesseract-ocr-<lang> packages.
 services:
   stirling-pdf:
-    image: stirlingtools/stirling-pdf@sha256:d5ff678ecacdb26b4b7892534540de64a04458b8aaa0a4f9daf2852221646f71  # :latest (2.x) pinned 2026-06
+    image: stirlingtools/stirling-pdf:latest
     container_name: stirling-pdf
     restart: unless-stopped
     environment:

@@ -2,7 +2,7 @@
 # docset catalog (Python, C, Linux man pages, hundreds more); no download step, no volume.
 services:
   devdocs:
-    image: ghcr.io/freecodecamp/devdocs@sha256:8623d9b9c6c3ac12bafbd3e378711c6f2d61a0baf23350c9da6e9261b3d66a60  # :latest (rev c797316) pinned 2026-06
+    image: ghcr.io/freecodecamp/devdocs:latest
     container_name: devdocs
     restart: unless-stopped
     networks:

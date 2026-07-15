@@ -13,6 +13,5 @@ RUN apk add --no-cache git \
  && sed -i -E '/^[[:space:]]*-[[:space:]]+(social|git-revision-date-localized|git-committers)[[:space:]]*:?.*$/d' mkdocs.yml \
  && mkdocs build -d /site
 
-# nginx:1.27-alpine
-FROM nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+FROM nginx:1.27-alpine
 COPY --from=build /site /usr/share/nginx/html

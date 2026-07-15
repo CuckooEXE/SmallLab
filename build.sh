@@ -61,9 +61,13 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # 2. pull the pinned prebuilt images the compose stack references (everything it lists that we do
-#    not build). --profile dhcp so the opt-in dnsmasq image is bundled too.
+#    not build). Every opt-in profile is enabled so their images bundle too -- including all four
+#    Ollama accelerator variants (CPU/NVIDIA share one image; AMD, Intel each add a large one).
 log "resolving prebuilt images from the compose stack"
-mapfile -t compose_imgs < <(docker compose --profile dhcp config --images 2>/dev/null | sort -u)
+mapfile -t compose_imgs < <(docker compose \
+  --profile dhcp --profile full-lab \
+  --profile ai-cpu --profile ai-nvidia --profile ai-amd --profile ai-intel \
+  config --images 2>/dev/null | sort -u)
 [[ ${#compose_imgs[@]} -gt 0 ]] || die "could not read images from compose (is .env present?)"
 prebuilt=()
 for img in "${compose_imgs[@]}"; do [[ "$img" == lab/* ]] || prebuilt+=("$img"); done

@@ -6,7 +6,7 @@
 # tmux is the key addition over the stock ttyd image: the control plane launches
 # `ttyd tmux new -A -s main`, so reconnecting (or opening a second tab) reattaches the
 # SAME session -> a shared, disconnect-surviving terminal.
-FROM tsl0922/ttyd@sha256:9ac4c4d0b436127af7703402fbd7ae51ff49179ca06ad0a132d7c5cc157015a7
+FROM tsl0922/ttyd:latest
 
 USER root
 RUN set -eux; \

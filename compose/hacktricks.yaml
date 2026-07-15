@@ -15,4 +15,4 @@ services:
       homepage.icon: /icons/hacktricks.svg
       homepage.href: https://hacktricks.${LAB_DOMAIN}
       homepage.description: Offline pentest methodology wiki
-      homepage.weight: "34"
+      homepage.weight: "35"

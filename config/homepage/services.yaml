@@ -7,8 +7,10 @@
         description: Search
         icon: /icons/google.svg
         target: _blank
+        siteMonitor: https://google.com  # tile shows HTTP response time in ms
     - Yahoo:
         href: https://yahoo.com
         description: Web portal
         icon: /icons/yahoo.svg
         target: _blank
+        ping: yahoo.com

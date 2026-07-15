@@ -16,4 +16,4 @@ services:
       homepage.icon: /icons/syscalls.svg
       homepage.href: https://syscalls.${LAB_DOMAIN}/?table=x86/64/x64/latest
       homepage.description: x86-64 syscalls by kernel version
-      homepage.weight: "38"
+      homepage.weight: "39"

@@ -1,7 +1,7 @@
 # reverse proxy -- terminates all https://*.lab, auto-configured from container labels.
 services:
   caddy:
-    image: lucaslorentz/caddy-docker-proxy@sha256:58b6e5dd982f873384786177139130c78e55c6ee315d1b2497f89edff8703acb  # ci-alpine (Caddy v2.11.4)
+    image: lucaslorentz/caddy-docker-proxy:ci-alpine
     container_name: caddy
     restart: unless-stopped
     ports:

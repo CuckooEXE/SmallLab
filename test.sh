@@ -61,11 +61,11 @@ if have dig; then
   else
     fail "wildcard resolution" "home.${LAB_DOMAIN} -> '${got:-<none>}', expected $HOST_IP"
   fi
-  got="$(dig +short +time=3 +tries=1 @"$HOST_IP" "packages.${LAB_DOMAIN}" 2>/dev/null | tail -1)"
+  got="$(dig +short +time=3 +tries=1 @"$HOST_IP" "gitlab.${LAB_DOMAIN}" 2>/dev/null | tail -1)"
   if [[ "$got" == "$HOST_IP" ]]; then
-    pass "packages.${LAB_DOMAIN} -> $got"
+    pass "gitlab.${LAB_DOMAIN} -> $got"
   else
-    fail "packages.${LAB_DOMAIN} resolution" "got '${got:-<none>}'"
+    fail "gitlab.${LAB_DOMAIN} resolution" "got '${got:-<none>}'"
   fi
   got="$(dig +short +time=3 +tries=1 @"$HOST_IP" example.com 2>/dev/null | tail -1)"
   if [[ -n "$got" ]]; then
@@ -105,13 +105,14 @@ get_code "PrivateBin      paste.${LAB_DOMAIN}"       "paste.${LAB_DOMAIN}"      
 get_code "Vaultwarden     vault.${LAB_DOMAIN}"       "vault.${LAB_DOMAIN}"       "/alive"
 get_code "Dozzle          logs.${LAB_DOMAIN}"        "logs.${LAB_DOMAIN}"        "/"
 get_code "MinIO console   s3-console.${LAB_DOMAIN}"  "s3-console.${LAB_DOMAIN}"  "/"
-# (Forgejo / packages.lab is checked in its own section below)
+# (GitLab / Mattermost are opt-in -- checked in the full-lab section below)
 
 # Dev tooling + offline references. The doc sites return 200 only once ./build.sh has
 # built their images (lab/<name>:latest) and they're present on the host.
 get_code "Compiler Explorer godbolt.${LAB_DOMAIN}"  "godbolt.${LAB_DOMAIN}"     "/"
 get_code "cppreference    cppref.${LAB_DOMAIN}"      "cppref.${LAB_DOMAIN}"      "/"
 get_code "x86 ref         x86.${LAB_DOMAIN}"         "x86.${LAB_DOMAIN}"         "/"
+get_code "ARM ref         arm.${LAB_DOMAIN}"         "arm.${LAB_DOMAIN}"         "/"
 get_code "tldr            tldr.${LAB_DOMAIN}"        "tldr.${LAB_DOMAIN}"        "/"
 get_code "Syscall tables  syscalls.${LAB_DOMAIN}"   "syscalls.${LAB_DOMAIN}"    "/"
 get_code "DevHints        devhints.${LAB_DOMAIN}"    "devhints.${LAB_DOMAIN}"    "/"
@@ -210,79 +211,42 @@ else
   skip "MinIO S3 check" "needs the minio/mc image (docker pull minio/mc)"
 fi
 
-section "Forgejo packages (packages.${LAB_DOMAIN})"
-org="${FORGEJO_ORG:-$LAB_DOMAIN}"
-fauth="${LAB_USER}:${LAB_PASSWORD}"
-fapi="https://packages.${LAB_DOMAIN}/api/v1"
-vtag="$(date +%s)"
-
-get_code "Forgejo UI      packages.${LAB_DOMAIN}" "packages.${LAB_DOMAIN}" "/"
-
-code="$(labcurl "packages.${LAB_DOMAIN}" -u "$fauth" -o /dev/null -w '%{http_code}' "${fapi}/orgs/${org}")"
-if [[ "$code" == 200 ]]; then
-  pass "API authenticated; public org '${org}' present"
+# GitLab and Mattermost are opt-in (--profile full-lab); each check runs only when its
+# container is up, and SKIPs (never FAILs) when the profile is off.
+section "full-lab profile (GitLab & Mattermost -- opt-in)"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx gitlab; then
+  get_code "GitLab sign-in  gitlab.${LAB_DOMAIN}" "gitlab.${LAB_DOMAIN}" "/users/sign_in"
 else
-  fail "Forgejo API/org" "GET /orgs/${org} -> $code (is bootstrap done?)"
+  skip "GitLab checks" "not enabled -- start with: docker compose --profile full-lab up -d"
+fi
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx mattermost; then
+  body="$(labcurl "chat.${LAB_DOMAIN}" "https://chat.${LAB_DOMAIN}/api/v4/system/ping" 2>/dev/null)"
+  if grep -q '"status" *: *"OK"' <<<"$body"; then
+    pass "Mattermost ping  chat.${LAB_DOMAIN} (status OK)"
+  else
+    fail "Mattermost ping" "response: ${body:-<none>}"
+  fi
+else
+  skip "Mattermost checks" "not enabled -- start with: docker compose --profile full-lab up -d"
 fi
 
-# fdel <type/name/version> -- remove a package version so the test stays idempotent.
-fdel() { labcurl "packages.${LAB_DOMAIN}" -u "$fauth" -o /dev/null -X DELETE "${fapi}/packages/${org}/$1" 2>/dev/null || true; }
-# ensure_image <ref> -- present locally, else pull; returns non-zero if unavailable.
-ensure_image() { docker image inspect "$1" >/dev/null 2>&1 || docker pull -q "$1" >/dev/null 2>&1; }
-
-if ! have docker; then
-  skip "PyPI publish/install"  "needs docker to run the client tools"
-  skip "Docker registry push/pull" "needs docker to run the client tools"
+# Ollama + Open WebUI are opt-in (--profile ai-<cpu|nvidia|amd|intel>); every accelerator
+# variant runs as the container `ollama`, so one name check covers all four. SKIPs when off.
+section "AI profile (Ollama & Open WebUI -- opt-in)"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ollama; then
+  body="$(labcurl "ollama.${LAB_DOMAIN}" "https://ollama.${LAB_DOMAIN}/api/version" 2>/dev/null)"
+  if grep -q '"version"' <<<"$body"; then
+    pass "Ollama API   ollama.${LAB_DOMAIN}/api/version ($(grep -oE '"version" *: *"[^"]+"' <<<"$body"))"
+  else
+    fail "Ollama API" "GET /api/version -> ${body:-<none>} (accelerator backend still loading?)"
+  fi
 else
-  # PyPI: build, twine upload (auth), then anonymous pip install from the public org.
-  if ensure_image python:3.12-slim; then
-    if docker run --rm \
-         --add-host "packages.${LAB_DOMAIN}:${HOST_IP}" \
-         -e U="$LAB_USER" -e P="$LAB_PASSWORD" -e ORG="$org" \
-         -e DOM="$LAB_DOMAIN" -e VER="0.0.${vtag}" \
-         -v "${CA}:/usr/local/share/ca-certificates/lab.crt:ro" \
-         python:3.12-slim bash -c '
-           set -e
-           update-ca-certificates >/dev/null 2>&1
-           pip install --quiet build twine >/dev/null 2>&1
-           mkdir -p /b/src/labtest && cd /b
-           echo "def hello(): return \"labtest $VER\"" > src/labtest/__init__.py
-           printf "[build-system]\nrequires=[\"setuptools>=61\"]\nbuild-backend=\"setuptools.build_meta\"\n[project]\nname=\"labtest\"\nversion=\"%s\"\n[tool.setuptools.packages.find]\nwhere=[\"src\"]\n" "$VER" > pyproject.toml
-           python -m build >/dev/null 2>&1
-           export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-           twine upload --repository-url "https://packages.${DOM}/api/packages/${ORG}/pypi" -u "$U" -p "$P" --non-interactive dist/* >/dev/null 2>&1
-           pip install --quiet --no-cache-dir --target /site --cert /etc/ssl/certs/ca-certificates.crt \
-             --index-url "https://packages.${DOM}/api/packages/${ORG}/pypi/simple" "labtest==$VER" >/dev/null 2>&1
-           test "$(PYTHONPATH=/site python -c "import labtest; print(labtest.hello())")" = "labtest $VER"
-         ' >/dev/null 2>&1; then
-      pass "PyPI publish (twine, auth) + install (pip, anonymous) round-trip"
-    else
-      fail "PyPI publish/install" "twine upload or anonymous pip install against ${org}/pypi failed"
-    fi
-    fdel "pypi/labtest/0.0.${vtag}"
-  else
-    skip "PyPI publish/install" "needs the python:3.12-slim image"
-  fi
-
-  # Docker/OCI: skopeo push (auth) + pull (anonymous), daemonless.
-  if ensure_image quay.io/skopeo/stable:latest && ensure_image alpine:latest; then
-    work="$(mktemp -d)"; docker save alpine:latest -o "$work/img.tar" 2>/dev/null
-    if docker run --rm --add-host "packages.${LAB_DOMAIN}:${HOST_IP}" \
-         -v "$work:/w:ro" -v "${CA}:/etc/containers/certs.d/packages.${LAB_DOMAIN}/ca.crt:ro" \
-         quay.io/skopeo/stable:latest copy --dest-creds "$fauth" \
-         docker-archive:/w/img.tar "docker://packages.${LAB_DOMAIN}/${org}/labtest:${vtag}" >/dev/null 2>&1 \
-       && docker run --rm --add-host "packages.${LAB_DOMAIN}:${HOST_IP}" \
-         -v "${CA}:/etc/containers/certs.d/packages.${LAB_DOMAIN}/ca.crt:ro" \
-         quay.io/skopeo/stable:latest copy "docker://packages.${LAB_DOMAIN}/${org}/labtest:${vtag}" dir:/tmp/out >/dev/null 2>&1; then
-      pass "Docker/OCI registry push (auth) + pull (anonymous) round-trip"
-    else
-      fail "Docker registry push/pull" "skopeo copy to/from packages.${LAB_DOMAIN}/${org} failed"
-    fi
-    rm -rf "$work"
-    fdel "container/labtest/${vtag}"
-  else
-    skip "Docker registry push/pull" "needs the quay.io/skopeo/stable and alpine images"
-  fi
+  skip "Ollama checks" "not enabled -- start with: docker compose --profile ai-cpu up -d"
+fi
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx open-webui; then
+  get_code "Open WebUI   ai.${LAB_DOMAIN}" "ai.${LAB_DOMAIN}" "/"
+else
+  skip "Open WebUI checks" "not enabled -- start with: docker compose --profile ai-cpu up -d"
 fi
 
 # Send a real SNTP client query and assert a server-mode reply with a sane stratum. Our
@@ -359,17 +323,6 @@ check_pin() {
 }
 check_pin "terminals"  "compose/term-control.yaml" "config/session-control/terminal.json"
 check_pin "workspaces" "compose/code-control.yaml" "config/session-control/code.json"
-
-section "Forgejo Actions runner"
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx forgejo-runner; then
-  if [[ -s "$SCRIPT_DIR/volumes/forgejo-runner/.runner" ]]; then
-    pass "runner container up and registered (.runner present)"
-  else
-    fail "Forgejo runner" "container up but not registered yet -- run ./bootstrap.sh"
-  fi
-else
-  skip "Forgejo runner" "forgejo-runner container not running"
-fi
 
 section "DHCP (dnsmasq -- opt-in)"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dhcp; then

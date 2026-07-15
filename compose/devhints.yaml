@@ -15,4 +15,4 @@ services:
       homepage.icon: /icons/devhints.svg
       homepage.href: https://devhints.${LAB_DOMAIN}
       homepage.description: Developer cheatsheets, offline
-      homepage.weight: "39"
+      homepage.weight: "40"

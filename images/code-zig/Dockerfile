@@ -6,7 +6,7 @@
 # ZLS is built FROM SOURCE with the zig we just installed -- this avoids depending
 # on ZLS release asset URLs (their naming has churned across versions) and keeps the
 # zig/ZLS versions in lockstep.
-FROM codercom/code-server@sha256:9a7848dd2627158e3873f88bd8743807a4168e4d580f26ec0cbc132a9d9ee78e
+FROM codercom/code-server:4.125.0
 
 # Keep these in lockstep (ZLS x.y tracks Zig x.y).
 ARG ZIG_VERSION=0.13.0

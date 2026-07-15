@@ -15,8 +15,8 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Remove a service](#remove-a-service)
 - [Add or rebuild a session profile](#add-or-rebuild-a-session-profile)
 - [Use a code workspace or terminal](#use-a-code-workspace-or-terminal)
-- [Use the package registry (Forgejo)](#use-the-package-registry-forgejo)
-- [Forgejo Actions (runner & workflows)](#forgejo-actions-runner--workflows)
+- [Run the full-lab profile (GitLab & Mattermost)](#run-the-full-lab-profile-gitlab--mattermost)
+- [Run local LLMs (Ollama) with GPU or CPU](#run-local-llms-ollama-with-gpu-or-cpu)
 - [Use object storage (MinIO)](#use-object-storage-minio)
 - [Use the file share](#use-the-file-share)
 - [Issue a cert from the CA](#issue-a-cert-from-the-ca)
@@ -50,8 +50,8 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 certutil -addstore -f Root lab-root-ca.crt
 ```
 
-Firefox keeps its own store — import it there too. Docker needs the CA to push to the registry
-(see [Use the package registry](#use-the-package-registry-forgejo)).
+Firefox keeps its own store — import it there too. git needs the CA to clone from GitLab over
+HTTPS (see [Run the full-lab profile](#run-the-full-lab-profile-gitlab--mattermost)).
 
 Resolve `*.lab` — point the whole resolver at the host, or send only `*.lab` to it (split DNS):
 
@@ -93,7 +93,7 @@ echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sud
    # <name> -- <one-line description> (<name>.lab).
    services:
      <name>:
-       image: <repo>@sha256:<digest>   # <readable tag>
+       image: <repo>:<tag>
        container_name: <name>
        restart: unless-stopped
        volumes:
@@ -117,13 +117,13 @@ echo "server 192.168.1.171 iburst" | sudo tee /etc/chrony/conf.d/lab.conf && sud
      `compose/minio.yaml`).
    - **Building your own image** (not a prebuilt): put the build context in `images/<name>/`
      (Dockerfile + any build-time conf), set `image: lab/<name>:latest`, and run `./build.sh <name>`
-     — skip the digest-pin step below (it applies only to prebuilt images).
+     — skip the pull step below (it applies only to prebuilt images).
 
 2. Add the file to `include:` in [`compose.yaml`](compose.yaml).
 3. If it has state, create its bind-mount dir: `mkdir -p volumes/<name>` (chown to the image's
    uid if it runs non-root).
-4. Pin the digest: `docker pull <repo>:<tag>` then
-   `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
+4. Pull the image: `docker pull <repo>:<tag>` (prefer a specific version tag over `latest`
+   where upstream publishes one).
 5. Apply and verify:
 
    ```bash
@@ -203,73 +203,113 @@ workspaces, `volumes/term/<name>/root` for terminals.
 
 ---
 
-## Use the package registry (Forgejo)
+## Run the full-lab profile (GitLab & Mattermost)
 
-**Description.** Push and pull container images and language packages through `packages.lab`.
-**When to use.** Publishing or installing artifacts in-lab. `bootstrap.sh` creates the admin
-user and a **public** org (named after `LAB_DOMAIN`), so anonymous pull/download works; uploads
-authenticate. Packages are created on first push.
-
-Docker (trust the CA first; push needs auth, public pull is anonymous):
-
-```bash
-sudo mkdir -p /etc/docker/certs.d/packages.lab
-sudo cp lab-root-ca.crt /etc/docker/certs.d/packages.lab/ca.crt
-docker login packages.lab                              # admin creds or a token
-docker tag alpine packages.lab/lab/alpine:latest       # packages.lab/<org>/<image>
-docker push packages.lab/lab/alpine:latest
-docker pull packages.lab/lab/alpine:latest             # public org -> no login
-```
-
-PyPI (note the `/api/packages/<org>/pypi` base):
+**Description.** The opt-in heavy tier: GitLab CE (`gitlab.lab` — repos, issues, CI/CD, package
+registries) and Mattermost team chat (`chat.lab`, plus its `mattermost-db` PostgreSQL sidecar).
+Gated behind the `full-lab` compose profile, so a plain `docker compose up -d` never starts it.
+**When to use.** The host has the headroom (GitLab alone wants ~4 GB RAM) and you want a full
+forge and team chat in-lab.
 
 ```bash
-twine upload --repository-url https://packages.lab/api/packages/lab/pypi -u labadmin dist/*
-pip install --index-url https://packages.lab/api/packages/lab/pypi/simple <pkg>   # anonymous
+# 1. runtime dirs, once (skip if created at install time)
+mkdir -p volumes/gitlab/{config,logs,data} volumes/mattermost/{config,data,logs,plugins,client-plugins,bleve-indexes} volumes/mattermost-db
+sudo chown -R 2000:2000 volumes/mattermost   # mattermost runs as uid 2000
+
+# 2. start it alongside the running stack; seed the Mattermost admin + team
+docker compose --profile full-lab up -d
+docker compose logs -f gitlab                # first boot migrates for SEVERAL MINUTES
+./bootstrap.sh                               # idempotent; seeds Mattermost (GitLab self-seeds)
+
+# off again (data kept in volumes/):
+docker compose --profile full-lab down gitlab mattermost mattermost-db
 ```
 
-Other formats (npm, Maven, Cargo, …) hang off `https://packages.lab/api/packages/<org>/` — see
-the [Forgejo packages docs](https://forgejo.org/docs/latest/user/packages/). Change the admin
-password in the UI afterward and mirror it in `.env`.
+Logins: GitLab is the **fixed `root` user** / `LAB_PASSWORD` (seeded on first boot only —
+change it in the UI afterward and mirror it in `.env`); Mattermost is `LAB_USER` /
+`LAB_PASSWORD` in the team named after `LAB_DOMAIN`. Both self-signups are off — admins create
+users.
+
+Git over HTTPS (no ssh port is published; the client must trust the lab CA):
+
+```bash
+git config --global http."https://gitlab.lab/".sslCAInfo ~/lab-root-ca.crt
+git clone https://gitlab.lab/<group>/<repo>.git      # auth: root or a token from the UI
+```
+
+GitLab's built-in package registries (PyPI, npm, Maven, …) hang off
+`https://gitlab.lab/api/v4/projects/<id>/packages/` — see the
+[GitLab package registry docs](https://docs.gitlab.com/user/packages/). The container registry
+and CI runners are **not** wired up: enabling the registry needs a second vhost
+(`registry_external_url` in `compose/gitlab.yaml`), and CI jobs need a `gitlab-runner`
+container registered against `https://gitlab.lab`.
+
+Mattermost admin tasks go through the System Console (`https://chat.lab` → System Console) or
+`mmctl`, e.g. `docker compose --profile full-lab exec mattermost mmctl --local user create ...`.
 
 ---
 
-## Forgejo Actions (runner & workflows)
+## Run local LLMs (Ollama) with GPU or CPU
 
-**Description.** Run CI workflows on the registered Actions runner; inspect or re-register it.
-**When to use.** Setting up CI, debugging a runner that isn't picking up jobs, or rotating its
-identity.
+**Description.** Ollama LLM runtime (`ollama.lab` API) + Open WebUI (`ai.lab` chat + model
+management). Opt-in and heavy, gated behind one **per-accelerator** compose profile.
+**When to use.** You want local, offline inference. CPU works on any host with no setup; the
+GPU profiles need a one-time host driver install.
 
-A minimal workflow (`.forgejo/workflows/ci.yml` in a repo):
-
-```yaml
-on: [push]
-jobs:
-  build:
-    runs-on: docker          # the `docker` label -> runs in node:22-bookworm
-    steps:
-      - run: echo "built on $(uname -a)"
-```
-
-Air-gap rules: `runs-on:` images must be pre-pulled on the host (the runner is `force_pull:
-false`); `uses:` actions resolve from this forge, so mirror the action repos into an org or use
-plain `run:` git steps. Labels/capacity live in `config/forgejo-runner/config.yaml`; edit then
-`docker compose restart forgejo-runner`.
-
-Inspect or re-register:
+**Drivers are not in the image.** A GPU's *kernel driver* (`nvidia.ko`, `amdgpu`, `i915`) lives
+on the **host**; the Ollama image only carries the *userspace* runtime (CUDA/ROCm/oneAPI). So on
+a fresh server you install the vendor stack on the host once, then start the matching profile.
+`./gpu-setup.sh` detects the GPU and prints the exact steps.
 
 ```bash
-docker compose logs --tail=20 forgejo-runner   # "waiting for registration" = not bootstrapped
-./bootstrap.sh                                 # idempotent: registers if needed
-# runners in the UI: https://packages.lab/-/admin/actions/runners
+# 0. runtime dirs, once (skip if created at install time)
+mkdir -p volumes/ollama volumes/open-webui
 
-# force a clean re-register (the secret/.runner live in the data volume, owned by uid 1000):
-docker compose exec -T forgejo-runner sh -c 'rm -f /data/secret /data/.runner'
-docker compose restart forgejo-runner && ./bootstrap.sh
+# 1. see what this host needs and which profile to use (read-only)
+./gpu-setup.sh
 ```
 
-For stronger isolation, point the runner at a `docker:dind` sidecar instead of the host socket
-(`DOCKER_HOST=tcp://docker-in-docker:2375`, drop the socket mount).
+Then pick **exactly one** accelerator profile (running two would collide — both bind the
+container name `ollama`):
+
+```bash
+docker compose --profile ai-cpu    up -d   # CPU only -- no drivers, works anywhere
+docker compose --profile ai-nvidia up -d   # NVIDIA (CUDA)
+docker compose --profile ai-amd    up -d   # AMD (ROCm)
+docker compose --profile ai-intel  up -d   # Intel (EXPERIMENTAL -- IPEX-LLM, see caveat)
+```
+
+Per-vendor host setup (what `gpu-setup.sh` walks you through):
+
+- **NVIDIA** — install the proprietary driver (`nvidia-smi` must work), then the **NVIDIA
+  Container Toolkit** so containers can see the GPU: `sudo ./gpu-setup.sh --install-nvidia-ct`
+  (Debian/Ubuntu; automates the toolkit repo + `nvidia-ctk runtime configure` + docker restart).
+- **AMD** — install `amdgpu` + ROCm for your card
+  ([ROCm install](https://rocm.docs.amd.com/projects/install-on-linux/)); ensure `/dev/kfd` and
+  `/dev/dri` exist. Unsupported consumer cards fall back to CPU unless you set
+  `HSA_OVERRIDE_GFX_VERSION` (uncomment it in `compose/ollama.yaml`).
+- **Intel (experimental)** — mainline Ollama has **no** Intel GPU backend, so `ai-intel` uses
+  Intel's IPEX-LLM build (a different image with a different bootstrap that lags mainline).
+  Install Intel's compute runtime + Level-Zero on the host, set `DEVICE=iGPU` or `DEVICE=Arc` in
+  `compose/ollama.yaml`, and verify the container's start command against current IPEX-LLM docs.
+
+All four variants share `volumes/ollama`, so models you pull persist across an accelerator
+switch. Pull and run models (Open WebUI can also do this from the browser):
+
+```bash
+docker compose exec ollama ollama pull llama3.2       # into the shared model volume
+docker compose exec ollama ollama run  llama3.2 "hi"  # quick CLI test
+curl https://ollama.lab/api/generate -d '{"model":"llama3.2","prompt":"hi","stream":false}' \
+  --resolve ollama.lab:443:$HOST_IP --cacert lab-root-ca.crt
+```
+
+Confirm the GPU is actually in use (not a silent CPU fallback): `docker compose logs ollama`
+should name the accelerator, and during a run `nvidia-smi` / `rocm-smi` / `intel_gpu_top` should
+show load. Off again (data kept): `docker compose --profile ai-<...> down ollama open-webui`.
+
+**Air-gap:** all four images are staged by `./build.sh` (the AMD and Intel images are large —
+several GB each). Models themselves are **not** bundled; pull them during your online staging
+window (`ollama pull ...` writes to `volumes/ollama`, which then rides along in backups).
 
 ---
 
@@ -502,11 +542,11 @@ then `docker compose up -d`.
 ## Smoke-test and health
 
 **Description.** Verify every service end-to-end (DNS, TLS chain, HTTP, step-ca, WebDAV, SMB,
-MinIO, Forgejo packages, sessions).
+MinIO, sessions; GitLab/Mattermost when the `full-lab` profile is up — skipped otherwise).
 **When to use.** After install, a restore, or an image bump.
 
 ```bash
-docker compose ps                 # all Up; Forgejo migrates for a few seconds on first boot
+docker compose ps                 # all Up; GitLab (if enabled) migrates for minutes on first boot
 ./test.sh                         # exits non-zero if any check fails (skips don't fail it)
 docker compose logs -f <service>  # follow one service
 ```

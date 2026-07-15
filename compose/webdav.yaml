@@ -3,7 +3,7 @@
 # Runs as 100:101 (Samba's smbuser) so files interoperate across SMB/HTTP. No auth.
 services:
   webdav:
-    image: nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10  # nginx:1.27-alpine
+    image: nginx:1.27-alpine
     container_name: webdav
     restart: unless-stopped
     user: "100:101"

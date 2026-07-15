@@ -15,4 +15,4 @@ services:
       homepage.icon: /icons/lolbas.svg
       homepage.href: https://lolbas.${LAB_DOMAIN}
       homepage.description: Windows living-off-the-land binaries
-      homepage.weight: "36"
+      homepage.weight: "37"

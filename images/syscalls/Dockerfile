@@ -19,6 +19,5 @@ RUN rm -rf db/arm db/arm64 db/mips db/powerpc db/riscv db/s390 db/x86/32 \
  && python3 scripts/build_web_db.py \
  && [ -s www/db/index.json ]
 
-# nginx:1.27-alpine
-FROM nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+FROM nginx:1.27-alpine
 COPY --from=build /src/www /usr/share/nginx/html

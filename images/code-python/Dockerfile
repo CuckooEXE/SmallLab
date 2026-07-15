@@ -6,7 +6,7 @@
 # Extensions come from Open VSX (code-server's default registry); Microsoft's
 # first-party Python extension is NOT on Open VSX, so we use the Pyright language
 # server + Ruff, both of which are.
-FROM codercom/code-server@sha256:9a7848dd2627158e3873f88bd8743807a4168e4d580f26ec0cbc132a9d9ee78e
+FROM codercom/code-server:4.125.0
 
 USER root
 RUN set -eux; \

@@ -1,0 +1,18 @@
+# arm -- offline AArch64 (A64) instruction-set reference (arm.lab). Self-contained image
+# mirroring scs.stanford.edu/~zyedidia/arm64, built by ./build.sh. Read-only, no state.
+services:
+  arm:
+    image: lab/arm:latest
+    container_name: arm
+    restart: unless-stopped
+    networks:
+      - caddy
+    labels:
+      caddy: arm.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 80}}"
+      homepage.group: Reference
+      homepage.name: ARM Instructions
+      homepage.icon: /icons/arm.svg
+      homepage.href: https://arm.${LAB_DOMAIN}
+      homepage.description: AArch64 (A64) ISA reference
+      homepage.weight: "34"

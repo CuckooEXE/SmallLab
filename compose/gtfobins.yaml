@@ -15,4 +15,4 @@ services:
       homepage.icon: /icons/gtfobins.svg
       homepage.href: https://gtfobins.${LAB_DOMAIN}
       homepage.description: Unix living-off-the-land binaries
-      homepage.weight: "35"
+      homepage.weight: "36"

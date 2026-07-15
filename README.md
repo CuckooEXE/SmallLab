@@ -1,10 +1,10 @@
 # SmallLab
 
 SmallLab is a single `docker compose` stack that turns one Linux host into a self-contained
-`.lab` environment for a LAN: trusted HTTPS on every service, a dashboard, DNS, NTP, a
-universal package registry, object storage, a file share, on-demand dev sessions, a set of
-browser-based dev tools, and a shelf of offline references — from one repo, with no runtime
-dependency on the public internet.
+`.lab` environment for a LAN: trusted HTTPS on every service, a dashboard, DNS, NTP, object
+storage, a file share, on-demand dev sessions, a set of browser-based dev tools, a shelf of
+offline references, and an opt-in `full-lab` profile that adds GitLab and Mattermost — from
+one repo, with no runtime dependency on the public internet.
 
 What it accomplishes:
 
@@ -13,7 +13,7 @@ What it accomplishes:
 - **No per-service wiring.** Technitium resolves `*.lab` to the host, Caddy discovers sites
   from container labels, and the dashboard builds itself from the same labels — adding a
   service is one compose file.
-- **Runs offline.** Images are pinned by digest, references and docs are staged ahead of time,
+- **Runs offline.** Images are pinned by version tag, references and docs are staged ahead of time,
   and the stack serves its own DNS, time, and packages, so it works on an air-gapped LAN.
 - **Reproducible.** Everything but `volumes/`, `.env`, and the exported CA is in git; backups
   are plain rsync snapshots.
@@ -31,8 +31,10 @@ What it accomplishes:
 | **Technitium** | `https://dns.lab` (console)                     | `53/udp`, `53/tcp`, `127.0.0.1:5380` | [DNS server](https://technitium.com/dns/), authoritative for `*.lab`, forwards the rest |
 | **NTP**        | `ntp.lab` (= `HOST_IP`)                          | `123/udp`                    | [chrony](https://chrony-project.org/) time source; serves the host clock to the LAN so TLS / TOTP / SMB don't break on client drift |
 | **DHCP** *(opt-in)* | serves the LAN — `--profile dhcp`          | `67/udp` (host net)          | [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) in DHCP-only mode; hands clients lab DNS + NTP + domain. **Off by default** |
-| **Forgejo**    | `https://packages.lab`                          | via Caddy                    | [Forgejo](https://forgejo.org) Git forge + universal package registry — Docker/OCI, npm, PyPI, Maven, Cargo, … ; one host serves UI, REST API **and** `/v2/` |
-| **Forgejo Runner** | registers to Forgejo (internal)             | — (drives Docker socket)     | [Forgejo Actions](https://forgejo.org/docs/latest/admin/actions/) CI runner; runs workflows as containers. Auto-registered by `bootstrap.sh` |
+| **GitLab** *(opt-in)* | `https://gitlab.lab` — `--profile full-lab` | via Caddy                    | [GitLab CE](https://docs.gitlab.com/install/docker/) DevOps forge — repos, issues, CI/CD, built-in package registries (PyPI, npm, Maven, …). Admin is the fixed `root` user. **Off by default** (heavy: ~4 GB RAM) |
+| **Mattermost** *(opt-in)* | `https://chat.lab` — `--profile full-lab` | via Caddy                | [Mattermost](https://mattermost.com) Team Edition chat (+ its PostgreSQL sidecar `mattermost-db`). Admin seeded by `bootstrap.sh`. **Off by default** |
+| **Ollama** *(opt-in)* | `https://ollama.lab` — `--profile ai-<cpu\|nvidia\|amd\|intel>` | via Caddy      | [Ollama](https://ollama.com) local LLM runtime (HTTP API). Pick one accelerator profile; CPU needs no drivers, GPU needs host setup (`./gpu-setup.sh`). **Off by default** |
+| **Open WebUI** *(opt-in)* | `https://ai.lab` — same `ai-*` profiles       | via Caddy                    | [Open WebUI](https://github.com/open-webui/open-webui) browser chat + model management, talks to Ollama. No login (LAN-trust). **Off by default** |
 | **MinIO**      | `https://s3.lab` (API), `https://s3-console.lab`| via Caddy                    | S3-compatible object storage + console |
 | **Samba**      | `\\files.lab\lab`                               | `445/tcp`, `139/tcp`         | SMB share, **passwordless guest access** (no auth) |
 | **Filebrowser**| `https://files.lab`                             | via Caddy                    | web face for the same share, **no login** (noauth) |
@@ -60,6 +62,7 @@ What it accomplishes:
 | **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
 | **x86 ref**    | `https://x86.lab`                               | via Caddy                    | offline x86/x64 instruction reference (mirror of [c9x.me/x86](https://c9x.me/x86/)) |
+| **ARM ref**    | `https://arm.lab`                               | via Caddy                    | offline AArch64 (A64) instruction reference (mirror of [Yedidia's ARM64 reference](https://www.scs.stanford.edu/~zyedidia/arm64/), generated from ARM's machine-readable spec) |
 | **tldr**       | `https://tldr.lab`                              | via Caddy                    | offline tldr-pages command cheatsheets ([tldr.inbrowser.app](https://github.com/InBrowserApp/tldr.inbrowser.app) PWA; pages baked into the bundle) |
 | **Syscall tables** | `https://syscalls.lab`                      | via Caddy                    | offline x86-64 syscall tables by kernel version (v4.0–v6.17) — full signatures with arg names, C types & registers (built from [mebeim/linux-syscalls](https://github.com/mebeim/linux-syscalls), [Systrack](https://syscalls.mebeim.net)) |
 | **ExplainShell** | `https://explainshell.lab`                    | via Caddy                    | [explainshell](https://github.com/idank/explainshell) — explains a shell command from its man pages; locally-built image, DB baked in |
@@ -71,7 +74,11 @@ What it accomplishes:
 
 Host-bound ports (`53`, `123`, `445`, `139`, `9000`) bind to `${HOST_IP}` only; Caddy binds
 `0.0.0.0`. DHCP is the exception — it uses host networking on one NIC and starts only under
-`--profile dhcp`.
+`--profile dhcp`. GitLab, Mattermost, and its database start only under `--profile full-lab`
+(see [Playbook → Run the full-lab profile](Playbook.md#run-the-full-lab-profile-gitlab--mattermost));
+neither publishes a host port — no git-over-ssh, clone over HTTPS. Ollama + Open WebUI start only
+under one `--profile ai-<cpu|nvidia|amd|intel>` accelerator profile (see
+[Playbook → Run local LLMs](Playbook.md#run-local-llms-ollama-with-gpu-or-cpu)).
 
 ## Repository layout
 
@@ -86,9 +93,10 @@ config/               # checked-in config the services read
 images/               # one dir per locally-built image -- Dockerfile (+ build-time conf) -> lab/<name>:latest
 volumes/              # runtime state -- bind mounts, git-ignored, NOT checked in
 dist/                 # build.sh output -- gzipped image tarballs for transfer (git-ignored)
-bootstrap.sh          # post-`up` DNS + CA + Forgejo wiring (idempotent)
+bootstrap.sh          # post-`up` DNS + CA wiring (+ Mattermost seeding); idempotent
 build.sh              # build every images/* + pull prebuilts + save tarballs to dist/ (staging step)
 ingest-repos.sh       # stage source trees into OpenGrok
+gpu-setup.sh          # detect the host GPU + report driver/toolkit steps for the Ollama profiles
 test.sh               # end-to-end smoke test of every service
 backup/               # pull-based backup tooling (runs on the backup server)
 .env                  # secrets + HOST_IP + LAB_DOMAIN (git-ignored; copy from .env.example)
@@ -103,10 +111,11 @@ and `../volumes/...` references.
 
 | Script | What it does | When to use |
 |--------|--------------|-------------|
-| `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, creates the Forgejo admin user + public org, and registers the Actions runner. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
+| `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, and (when the `full-lab` profile is up) seeds the Mattermost admin + default team. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
 | `build.sh` | The staging step: builds every custom image under `images/<name>/` into `lab/<name>:latest`, pulls the pinned prebuilt images the stack references, and saves both groups as gzipped tarballs under `dist/` for transfer (`docker load` on the target). Needs internet + docker. | In the provisioning window, and to refresh images later. |
 | `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `grok.lab`. |
-| `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, Forgejo packages, sessions). Exits non-zero on any failure. | After install, a restore, or an image bump. |
+| `gpu-setup.sh` | Detects the host GPU (`lspci`/`/dev/dri`), reports which driver + container toolkit each vendor needs, and prints the matching `--profile ai-*`. Read-only by default; `--install-nvidia-ct` installs the NVIDIA Container Toolkit on Debian/Ubuntu. | On a fresh server before starting an Ollama GPU profile. |
+| `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, sessions; GitLab/Mattermost when the `full-lab` profile is up). Exits non-zero on any failure. | After install, a restore, or an image bump. |
 | `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
 | `backup/lab-restore.sh` | Lists snapshots and restores one into a host's `volumes/`. | Disaster recovery or seeding a new host. |
 
@@ -152,14 +161,14 @@ cd /opt/lab
 # secrets + host IP (.env is git-ignored; create from the template)
 cp .env.example .env
 $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, set the change-me
-                                          # passwords, keep LAB_DOMAIN=lab, and set DOCKER_GID
-                                          # (getent group docker | cut -d: -f3)
+                                          # passwords, keep LAB_DOMAIN=lab
 
 # runtime dirs (bind mounts, git-ignored); a few need specific ownership
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,forgejo,forgejo-runner,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/gitlab/{config,logs,data} volumes/mattermost/{config,data,logs,plugins,client-plugins,bleve-indexes} volumes/mattermost-db   # full-lab profile (harmless if unused)
+mkdir -p volumes/ollama volumes/open-webui                                     # ai-* profiles (harmless if unused)
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
-sudo chown 1000:1000  volumes/forgejo        # forgejo runs as uid 1000 (git)
-sudo chown 1000:1000  volumes/forgejo-runner # runner runs as uid 1000
+sudo chown -R 2000:2000 volumes/mattermost   # mattermost runs as uid 2000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
 # (OpenGrok chowns volumes/opengrok/src to uid 1111 on boot, so leave that mount writable —
@@ -170,20 +179,21 @@ sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 
 # dist/ over, and `for f in dist/*.tar.gz; do docker load -i "$f"; done` in place of this line.
 ./build.sh
 
-# bring it up and wire DNS + CA + Forgejo (+ register the Actions runner)
-docker compose up -d
+# bring it up and wire DNS + CA
+docker compose up -d                          # add --profile full-lab for GitLab + Mattermost
 ./bootstrap.sh
 ```
 
 `bootstrap.sh` creates the `lab` DNS zone, points `*.lab` + `lab` at `HOST_IP`, exports the
-root CA to `./lab-root-ca.crt`, restarts Caddy to issue certs, and creates the Forgejo admin
-user + public packages org. It is idempotent — re-run it any time. HTTPS goes valid a few
-moments **after** bootstrap, not at `up` (step-ca needs the DNS records to validate each name).
+root CA to `./lab-root-ca.crt`, restarts Caddy to issue certs, and — when the `full-lab`
+profile is up — seeds the Mattermost admin + default team. It is idempotent — re-run it any
+time. HTTPS goes valid a few moments **after** bootstrap, not at `up` (step-ca needs the DNS
+records to validate each name).
 
 Verify, then onboard clients (see [Playbook → Onboard a client](Playbook.md#onboard-a-client)):
 
 ```bash
-docker compose ps           # every service Up (Forgejo takes a few seconds to migrate)
+docker compose ps           # every service Up (GitLab, if enabled, migrates for minutes on first boot)
 ./test.sh                   # end-to-end smoke test
 ```
 
@@ -228,9 +238,10 @@ Mechanics, the retention curve, and disaster recovery are in [`backup/README.md`
 
 ## Notes
 
-- **Every image is pinned by digest** (`@sha256:…`); the readable tag is in the trailing
-  comment on each `image:` line. Bump one with `docker pull <repo>:<tag>` then swap in the
-  digest from `docker image inspect <repo>:<tag> --format '{{index .RepoDigests 0}}'`.
+- **Every image is referenced by name and tag** (`<repo>:<tag>`), pinned to a specific
+  version where upstream publishes one. Digest pins (`@sha256:…`) were dropped because
+  `docker save`/`docker load` round-trips lose the image name when it was pulled by bare
+  digest. Bump one with `docker pull <repo>:<tag>` and update the tag on the `image:` line.
 - **`.env`, `lab-root-ca.crt`, and `volumes/` are git-ignored.** Keep `.env` and the CA in a
   password manager — they're not reproducible from git.
 - **The trusted root lives in `volumes/stepca/`** (root + intermediate, their keys, and the key

@@ -15,7 +15,7 @@
 # DNS (opt 6) and NTP (opt 42) at HOST_IP -- same outcome, no second server. See Playbook.
 services:
   dhcp:
-    image: 4km3/dnsmasq@sha256:52e25fb2601156ab66f6a0872c180b285df7cafaa41267d8d65689f066490641  # :latest pinned 2026-06
+    image: 4km3/dnsmasq:latest
     container_name: dhcp
     hostname: dhcp
     restart: unless-stopped
