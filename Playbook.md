@@ -406,25 +406,60 @@ docker compose up -d nexus            # first start takes ~1-2 min (DB init); pa
 
 Create repos under **Server administration → Repositories → Create repository** (or the REST API).
 Each format is path-routed under `packages.lab/repository/<name>/`, so no compose change is ever
-needed to add one. Client setup per format:
+needed to add one. The pattern below is the same for every format: one **hosted** repo (you
+publish to it), one **proxy** repo (mirrors/caches an upstream), and one **group** repo fronting
+both (you consume from it — groups are read-only, so pull from the group, push to the hosted).
+Nexus gates publishing by default, so every push authenticates as `LAB_USER` / `LAB_PASSWORD`.
+Client setup per format:
 
 ```bash
-# --- npm ---  (hosted repo "npm-internal"; or a group fronting hosted + an npmjs.org proxy)
-npm config set registry https://packages.lab/repository/npm-internal/
-npm publish                                              # push
-# auth (Nexus gates publish by default): npm config set //packages.lab/repository/npm-internal/:_auth $(printf '%s' "$LAB_USER:$LAB_PASSWORD" | base64)
+# --- npm ---  create: npm-hosted (push), npm-proxy (registry.npmjs.org), npm-group (pull)
+npm config set registry https://packages.lab/repository/npm-group/          # pull (hosted + proxy)
+npm install <pkg>
+npm login   --registry https://packages.lab/repository/npm-hosted/          # LAB_USER / LAB_PASSWORD
+npm publish --registry https://packages.lab/repository/npm-hosted/          # push
 
-# --- pip / PyPI ---  (hosted repo "pypi-internal"; or a proxy of pypi.org to mirror)
-pip install --index-url https://$LAB_USER:$LAB_PASSWORD@packages.lab/repository/pypi-internal/simple/ <pkg>
-twine upload --repository-url https://packages.lab/repository/pypi-internal/ dist/*     # push
+# --- pip / PyPI ---  create: pypi-hosted (push), pypi-proxy (pypi.org), pypi-group (pull)
+pip install --index-url https://packages.lab/repository/pypi-group/simple/ <pkg>          # pull
+twine upload --repository-url https://packages.lab/repository/pypi-hosted/ \
+  -u "$LAB_USER" -p "$LAB_PASSWORD" dist/*                                   # push (or put creds in ~/.pypirc)
 
-# --- raw (tarballs / any file) ---  (hosted "raw-internal")
-curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./artifact.tar.gz https://packages.lab/repository/raw-internal/artifact.tar.gz
-curl -O https://packages.lab/repository/raw-internal/artifact.tar.gz                     # pull
+# --- cargo (Rust) ---  create: cargo-hosted (push), cargo-proxy (crates.io), cargo-group (pull)
+# ~/.cargo/config.toml -- the sparse+ prefix is REQUIRED:
+#   [registries.lab]         index = "sparse+https://packages.lab/repository/cargo-group/"
+#   [registries.lab-hosted]  index = "sparse+https://packages.lab/repository/cargo-hosted/"
+#   [source.crates-io]       replace-with = "lab"        # resolve crates.io deps through Nexus
+cargo build                                                                  # pull
+export CARGO_REGISTRIES_LAB_HOSTED_TOKEN="Basic $(printf '%s' "$LAB_USER:$LAB_PASSWORD" | base64)"
+cargo publish --registry lab-hosted                                          # push
 
-# --- apt / Debian ---  proxy repo "debian" mirrors an upstream (e.g. http://deb.debian.org/debian):
-echo "deb https://packages.lab/repository/debian/ bookworm main" | sudo tee /etc/apt/sources.list.d/lab.list
-sudo apt update                                          # a hosted apt repo needs a GPG signing key pasted into its config
+# --- Go modules ---  create: go-hosted (push, needs Nexus >= 3.93), go-proxy (proxy.golang.org), go-group (pull)
+printf 'machine packages.lab\nlogin %s\npassword %s\n' "$LAB_USER" "$LAB_PASSWORD" >> ~/.netrc && chmod 600 ~/.netrc
+go env -w GOAUTH=netrc GOPROXY=https://packages.lab/repository/go-group/ GOSUMDB=off
+go get github.com/you/module@v1.2.3                                          # pull
+# push: PUT the module zip at the Go proxy layout <module>/@v/<version>.zip (Nexus reads go.mod from it):
+curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file module.zip \
+  https://packages.lab/repository/go-hosted/github.com/you/module/@v/v1.2.3.zip
+
+# --- raw (any file / tarball) ---  create: raw-hosted (push), raw-proxy (mirror an HTTP file tree), raw-group
+curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./artifact.tar.gz \
+  https://packages.lab/repository/raw-hosted/dist/artifact.tar.gz           # push (path auto-created)
+curl -O https://packages.lab/repository/raw-hosted/dist/artifact.tar.gz     # pull
+
+# --- apt / Debian ---  create: apt-proxy (deb.debian.org/debian) and/or apt-hosted (needs a PGP signing key)
+echo "deb https://packages.lab/repository/apt-proxy/ bookworm main" | sudo tee /etc/apt/sources.list.d/lab.list
+sudo apt update                                                             # pull (upstream's signature verifies as-is)
+# push a .deb to a hosted repo (create it with a generated GPG key; Nexus signs the METADATA, not the package):
+curl -u "$LAB_USER:$LAB_PASSWORD" -H "Content-Type: multipart/form-data" \
+  --data-binary @./mypkg_1.0_amd64.deb https://packages.lab/repository/apt-hosted/
+# hosted-repo clients import that repo's public key, then add its <distribution>:
+#   echo "deb https://packages.lab/repository/apt-hosted/ <distribution> main" | sudo tee /etc/apt/sources.list.d/lab-hosted.list
+
+# --- yum / RPM ---  create: yum-hosted (push; set "Repodata Depth"), yum-proxy (a Rocky/Alma/EPEL mirror), yum-group
+# pull: /etc/yum.repos.d/lab.repo -> [lab] baseurl=https://packages.lab/repository/yum-group/  enabled=1  gpgcheck=0
+sudo dnf install <pkg>
+curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./mypkg-1.0-1.x86_64.rpm \
+  https://packages.lab/repository/yum-hosted/mypkg-1.0-1.x86_64.rpm         # push (metadata rebuilds ~60s later)
 ```
 
 **Docker / OCI (`docker.lab`).** Create a Docker **group** repo with an HTTP connector on **8082**
