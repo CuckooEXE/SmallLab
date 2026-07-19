@@ -27,7 +27,7 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Restore a snapshot](#restore-a-snapshot)
 - [Preserve the root CA across a rebuild](#preserve-the-root-ca-across-a-rebuild)
 - [Enable or disable DHCP](#enable-or-disable-dhcp)
-- [Index code in OpenGrok](#index-code-in-opengrok)
+- [Index code in Sourcebot](#index-code-in-sourcebot)
 - [Rebuild images](#rebuild-images)
 - [Smoke-test and health](#smoke-test-and-health)
 - [Update images and everyday compose](#update-images-and-everyday-compose)
@@ -659,19 +659,53 @@ Technitium. Clients still need to trust the root CA (DHCP can't push it) —
 
 ---
 
-## Index code in OpenGrok
+## Index code in Sourcebot
 
-**Description.** Stage source trees for cross-reference + full-text search at `grok.lab`.
-**When to use.** You want to read or grep a codebase in-lab. Fully offline.
+**Description.** Stage source for code search + cross-reference at `search.lab`.
+**When to use.** You want to read, search, or navigate a codebase in-lab. Fully offline.
 
 ```bash
-./ingest-repos.sh ~/incoming/*.tar.gz      # extracts archives, or copies a directory in
-docker compose restart opengrok            # index now instead of waiting for the timer
+./ingest-repos.sh ~/incoming/*.tar.gz      # archives -> one-commit git repos
+./ingest-repos.sh ~/src/linux              # a real clone -> copied WITH its history
+docker compose restart sourcebot           # index now instead of waiting for the poll
 ```
 
-One project per top-level dir under `volumes/opengrok/src`; reindexed on startup and every
-`SYNC_PERIOD_MINUTES`. If a later ingest can't write the dir (OpenGrok chowns it to uid 1111 on
-boot), take it back first: `sudo chown -R "$USER" volumes/opengrok/src`.
+**Sourcebot indexes git repositories only.** A folder is skipped unless it has a `.git` at its
+root *and* a `remote.origin.url` set. `ingest-repos.sh` guarantees both: a real clone is copied
+verbatim (history preserved, existing origin kept), and an archive or plain directory is turned
+into a single-commit repo with a synthetic `file:///repos/<name>` origin. One project per
+top-level dir under `volumes/sourcebot/repos`, globbed by `config/sourcebot/config.json`.
+
+Local repos are read-only to Sourcebot — it never runs `git fetch`. To pick up new revisions,
+re-ingest (the script rebuilds a project from scratch) and let it re-index.
+
+If a later ingest can't write the dir, take it back: `sudo chown -R "$USER" volumes/sourcebot/repos`.
+The container mounts it `:ro`, so it never changes ownership back.
+
+### Accounts
+
+Browsing and searching are anonymous — no login, like the rest of the lab
+(`FORCE_ENABLE_ANONYMOUS_ACCESS` in `compose/sourcebot.yaml`). Admin settings need the owner
+account, which `bootstrap.sh` claims as `${LAB_USER}@search.lab` / `LAB_PASSWORD`.
+
+Two things worth knowing, because Sourcebot has no owner-seeding mechanism of its own:
+
+- **The first account to register becomes OWNER.** If `bootstrap.sh` couldn't claim it, whoever
+  browses to the instance first will. Claim it promptly at `https://search.lab/onboard`.
+- **Anonymous access needs the org marked onboarded.** Until then *every* visitor is redirected
+  to the setup wizard. `bootstrap.sh` sets that flag with a direct `UPDATE` against
+  `sourcebot-db`, because upstream only exposes it through a browser server action. If a version
+  bump breaks that write, finish the wizard by hand — nothing else depends on it.
+
+To reset the instance completely (forget accounts and the index):
+
+```bash
+docker compose down sourcebot sourcebot-db sourcebot-redis
+sudo rm -rf volumes/sourcebot/data volumes/sourcebot-db volumes/sourcebot-redis
+mkdir -p volumes/sourcebot/data volumes/sourcebot-db volumes/sourcebot-redis
+sudo chown -R 1500:1500 volumes/sourcebot
+docker compose up -d && ./bootstrap.sh      # re-claims the owner, re-indexes volumes/sourcebot/repos
+```
 
 ---
 

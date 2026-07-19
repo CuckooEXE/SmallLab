@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Sourcebot">
+  <!-- generic "search over code" glyph: angle brackets behind a magnifier; not the project's mark -->
+  <g fill="none" stroke="#5b7fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="20,20 10,31 20,42"/>
+    <polyline points="35,17 27,45"/>
+  </g>
+  <g fill="none" stroke="#5b7fff" stroke-width="4" stroke-linecap="round">
+    <circle cx="43" cy="27" r="12"/>
+    <line x1="52" y1="36" x2="59" y2="45"/>
+  </g>
+</svg>

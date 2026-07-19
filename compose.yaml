@@ -30,7 +30,7 @@ include:
   - compose/plantuml.yaml
   - compose/code-control.yaml
   - compose/term-control.yaml
-  - compose/opengrok.yaml
+  - compose/sourcebot.yaml
   - compose/sist2.yaml
   - compose/astexplorer.yaml
   - compose/jsoncrack.yaml

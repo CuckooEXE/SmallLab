@@ -1,0 +1,110 @@
+# Sourcebot -- code search + cross-reference over local git repos (search.lab). Replaces
+# OpenGrok. A Next.js app backed by Zoekt (trigram index), with a PostgreSQL sidecar
+# (sourcebot-db) and a Redis sidecar (sourcebot-redis) -- neither carries Caddy labels, so
+# only the web app is ever proxied. Same sidecar posture as mattermost/mattermost-db.
+#
+# INDEXING MODEL -- unlike OpenGrok (which indexed any directory of source), Sourcebot only
+# indexes *git repositories*: a folder must have a .git at its root AND a remote.origin.url
+# set in its git config, or it is silently skipped. ./ingest-repos.sh handles that -- it
+# turns a tarball into a one-commit git repo with a synthetic file:// origin, and preserves
+# real history when you hand it an actual clone. The connection in config/sourcebot/config.json
+# globs file:///repos/* over the read-only mount below.
+#
+# Local repos are read-only to Sourcebot: it will never `git fetch` them. Re-ingest and let
+# it re-index (it polls) to pick up new revisions.
+#
+# AIR-GAP -- SOURCEBOT_TELEMETRY_DISABLED kills the PostHog install/upgrade events, and
+# CHANGELOG_ENABLED=false stops the changelog poll to static.sourcebot.dev (that one is ON by
+# default and is NOT covered by the telemetry flag). A 24h "service ping" to
+# deployments.sourcebot.dev has no off switch short of an offline EE licence; with no egress
+# it just fails and logs. The `$schema` URL in config.json is never fetched -- config is
+# validated against a schema compiled into the image.
+#
+# FIRST BOOT -- the first account to register becomes the OWNER (there is no way to seed one
+# out of band). bootstrap.sh claims it as LAB_USER so it can't be taken by whoever browses
+# first. Anonymous read access is enabled below, so day-to-day searching needs no login.
+services:
+  sourcebot:
+    image: docker.sourcebot.dev/sourcebot-dev/sourcebot:v5.1.2
+    container_name: sourcebot
+    restart: unless-stopped
+    user: sourcebot            # uid/gid 1500 baked into the image; the bind mounts below must match
+    depends_on:
+      sourcebot-db:
+        condition: service_healthy
+      sourcebot-redis:
+        condition: service_healthy
+    environment:
+      - CONFIG_PATH=/data/config.json
+      # AUTH_URL must be the externally-reachable origin or login/session cookies break.
+      - AUTH_URL=https://search.${LAB_DOMAIN}
+      - AUTH_SECRET=${SOURCEBOT_AUTH_SECRET}
+      - SOURCEBOT_ENCRYPTION_KEY=${SOURCEBOT_ENCRYPTION_KEY}
+      # LAB_PASSWORD is spliced into this URL -- reserved URL chars (@ / : ? #) in it would
+      # need percent-encoding here AND in sourcebot-db's POSTGRES_PASSWORD. Same caveat as
+      # Mattermost's datasource.
+      - DATABASE_URL=postgresql://sourcebot:${LAB_PASSWORD}@sourcebot-db:5432/sourcebot
+      - REDIS_URL=redis://sourcebot-redis:6379
+      - SOURCEBOT_TELEMETRY_DISABLED=true   # air-gap: no PostHog install/upgrade events
+      - CHANGELOG_ENABLED=false             # air-gap: no changelog fetch (defaults to true)
+      - FORCE_ENABLE_ANONYMOUS_ACCESS=true  # browse + search with no login, like the rest of the lab
+    volumes:
+      # config.json is mounted INSIDE the data dir (matching upstream's layout); the more
+      # specific file mount wins over the directory mount below it.
+      - ../config/sourcebot/config.json:/data/config.json:ro
+      - ../volumes/sourcebot/data:/data              # Zoekt shards + app state; chown 1500:1500
+      - ../volumes/sourcebot/repos:/repos:ro         # ./ingest-repos.sh writes here
+    networks:
+      - caddy
+    healthcheck:
+      # The image ships no curl; node is guaranteed present. Anything under 500 counts as up
+      # (an unauthenticated GET / may legitimately redirect).
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s   # first boot runs prisma migrations before serving
+    labels:
+      caddy: search.${LAB_DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      homepage.group: Tools
+      homepage.name: Sourcebot
+      homepage.icon: /icons/sourcebot.svg
+      homepage.href: https://search.${LAB_DOMAIN}
+      homepage.description: Code search & cross-reference
+      homepage.weight: "36"
+
+  sourcebot-db:
+    image: postgres:16.14-alpine    # same pin as mattermost-db, so it's one image in the bundle
+    container_name: sourcebot-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sourcebot
+      - POSTGRES_PASSWORD=${LAB_PASSWORD}
+      - POSTGRES_DB=sourcebot
+    volumes:
+      - ../volumes/sourcebot-db:/var/lib/postgresql/data
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sourcebot -d sourcebot"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  sourcebot-redis:
+    image: redis:8.8.0-alpine
+    container_name: sourcebot-redis
+    restart: unless-stopped
+    # Sourcebot uses Redis as a job queue, not a cache -- persist it so an in-flight index
+    # job survives a restart instead of wedging.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ../volumes/sourcebot-redis:/data
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

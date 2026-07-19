@@ -58,7 +58,7 @@ What it accomplishes:
 | **LibreTranslate** | `https://translate.lab`                     | via Caddy                    | [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) — offline machine translation (API + UI); language models baked into the image |
 | **Stirling-PDF** | `https://pdf.lab`                             | via Caddy                    | [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) — upload a PDF → OCR → extract text, plus a full PDF toolbox; telemetry off |
 | **ConvertX**   | `https://convert.lab`                           | via Caddy                    | [ConvertX](https://github.com/C4illin/ConvertX) — convert files between ~1000 formats (images / docs / audio / video); batch upload, no login |
-| **OpenGrok**   | `https://grok.lab`                              | via Caddy                    | source cross-reference + full-text code search over local repos (`./ingest-repos.sh`); read-only, no login |
+| **Sourcebot**  | `https://search.lab`                            | via Caddy                    | [Sourcebot](https://github.com/sourcebot-dev/sourcebot) — code search + cross-reference over local **git repos** (`./ingest-repos.sh`); anonymous read-only browsing (owner account seeded by `bootstrap.sh` for settings) |
 | **Code Workspaces** | `https://code.lab`, sessions at `https://<name>.code.lab` | via Caddy        | on-demand [code-server](https://github.com/coder/code-server) sessions — create / open / stop / delete from a tiny UI; baked per-language profiles. **No login** (shared) |
 | **Terminals**  | `https://terminal.lab`, sessions at `https://<name>.terminal.lab` | via Caddy   | on-demand [ttyd](https://github.com/tsl0922/ttyd) browser terminals (`tmux`); same create/stop/delete UI + baked tool profiles. **No login** (shared) |
 | **cppreference** | `https://cppref.lab`                          | via Caddy                    | offline C / C++ standard library reference (static HTML) |
@@ -96,7 +96,7 @@ volumes/              # runtime state -- bind mounts, git-ignored, NOT checked i
 dist/                 # build.sh output -- gzipped image tarballs for transfer (git-ignored)
 bootstrap.sh          # post-`up` DNS + CA wiring (+ Mattermost seeding); idempotent
 build.sh              # build every images/* + pull prebuilts + save tarballs to dist/ (staging step)
-ingest-repos.sh       # stage source trees into OpenGrok
+ingest-repos.sh       # stage source trees as git repos for Sourcebot
 gpu-setup.sh          # detect the host GPU + report driver/toolkit steps for the Ollama profiles
 test.sh               # end-to-end smoke test of every service
 backup/               # pull-based backup tooling (runs on the backup server)
@@ -114,7 +114,7 @@ and `../volumes/...` references.
 |--------|--------------|-------------|
 | `bootstrap.sh` | Wires the running stack: creates the `lab` DNS zone + `*.lab`/`lab` records, exports the root CA to `lab-root-ca.crt`, restarts Caddy to issue certs, and (when the `full-lab` profile is up) seeds the Mattermost admin + default team. Idempotent. | After `docker compose up -d` on first install, and after any `--force-recreate` or image bump that resets a container. Re-run any time to repair. |
 | `build.sh` | The staging step: builds every custom image under `images/<name>/` into `lab/<name>:latest`, pulls the pinned prebuilt images the stack references, and saves both groups as gzipped tarballs under `dist/` for transfer (`docker load` on the target). Needs internet + docker. | In the provisioning window, and to refresh images later. |
-| `ingest-repos.sh` | Extracts or copies source trees into `volumes/opengrok/src` for OpenGrok to index. Offline. | To add or update code on `grok.lab`. |
+| `ingest-repos.sh` | Stages source into `volumes/sourcebot/repos` as valid git repos for Sourcebot to index — a real clone is copied with its history, an archive or plain directory becomes a one-commit repo with a synthetic origin. Offline. | To add or update code on `search.lab`. |
 | `gpu-setup.sh` | Detects the host GPU (`lspci`/`/dev/dri`), reports which driver + container toolkit each vendor needs, and prints the matching `--profile ai-*`. Read-only by default; `--install-nvidia-ct` installs the NVIDIA Container Toolkit on Debian/Ubuntu. | On a fresh server before starting an Ollama GPU profile. |
 | `test.sh` | End-to-end smoke test of every service (DNS, TLS chain, HTTP, step-ca, WebDAV/SMB, MinIO, sessions; GitLab/Mattermost when the `full-lab` profile is up). Exits non-zero on any failure. | After install, a restore, or an image bump. |
 | `backup/lab-backup.sh` | Takes one rsync hard-link snapshot of the host's `volumes/` and prunes to the retention curve. Runs on the backup server (its timer calls it every 3h). | Off-schedule backups; the timer handles the routine ones. |
@@ -165,7 +165,7 @@ $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, se
                                           # passwords, keep LAB_DOMAIN=lab
 
 # runtime dirs (bind mounts, git-ignored); a few need specific ownership
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,nexus,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,nexus,sourcebot/data,sourcebot/repos,sourcebot-db,sourcebot-redis}
 mkdir -p volumes/gitlab/{config,logs,data} volumes/mattermost/{config,data,logs,plugins,client-plugins,bleve-indexes} volumes/mattermost-db   # full-lab profile (harmless if unused)
 mkdir -p volumes/ollama volumes/open-webui                                     # ai-* profiles (harmless if unused)
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
@@ -173,8 +173,10 @@ sudo chown -R 2000:2000 volumes/mattermost   # mattermost runs as uid 2000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
 sudo chown -R 200:200 volumes/nexus          # nexus runs as a fixed uid 200 (else it crash-loops)
-# (OpenGrok chowns volumes/opengrok/src to uid 1111 on boot, so leave that mount writable —
-#  a :ro src makes the container exit.)
+sudo chown -R 1500:1500 volumes/sourcebot    # sourcebot runs as a fixed uid 1500 (`user: sourcebot`)
+# volumes/sourcebot/repos is mounted READ-ONLY into the container, so ./ingest-repos.sh needs it
+# writable by YOU. Sourcebot only reads it, and never chowns it back:
+sudo chown -R "$USER" volumes/sourcebot/repos
 
 # build the custom images + pull the pinned prebuilts (needs internet — the air-gap prep window).
 # build.sh also writes dist/*.tar.gz; for an air-gapped host, run build.sh on an online box, copy

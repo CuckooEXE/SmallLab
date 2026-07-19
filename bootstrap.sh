@@ -17,6 +17,8 @@
 #      first boot.)
 #  10. rotates Nexus's built-in admin from the well-known first-boot password (admin123) to
 #      LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab
+#  11. claims Sourcebot's OWNER account as LAB_USER and marks its org onboarded, so
+#      search.${LAB_DOMAIN} serves anonymous search instead of a setup wizard
 #
 # Everything is driven by curl against the Technitium API plus a few `docker compose exec`
 # calls. Idempotent: re-running overwrites the A records, no-ops the zone create, and leaves
@@ -323,8 +325,90 @@ log "configuring Nexus (always-on)"
 rotate_nexus_admin_password \
   || warn "Nexus admin rotation did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
-# OpenGrok (grok.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
-# every SYNC_PERIOD_MINUTES. Stage code with ./ingest-repos.sh.
+# setup_sourcebot -- claim the Sourcebot OWNER account and mark the org onboarded, so
+# search.${LAB_DOMAIN} lands on a usable search page instead of a setup wizard.
+#
+# WHY THIS IS FIDDLY. Sourcebot has no owner-seeding env var, no admin CLI, and no
+# registration API. Two facts drive the steps below:
+#   1. The FIRST account to register becomes OWNER. Until someone claims it, whoever browses
+#      to the instance first gets it -- so bootstrap claims it as LAB_USER.
+#   2. Anonymous access (FORCE_ENABLE_ANONYMOUS_ACCESS in compose/sourcebot.yaml) is NOT
+#      enough on its own: the app shell also gates on Org.isOnboarded, and every visitor --
+#      anonymous included -- is redirected to /onboard until that flag is set.
+#
+# Registration rides NextAuth's credentials provider, which creates the account when the
+# email doesn't exist yet; it needs the CSRF double-submit dance (GET /api/auth/csrf, then a
+# form-encoded POST echoing the cookie jar). Onboarding is a Next.js *server action*, which
+# is not reasonably callable over curl -- its action ID changes per build -- so we set the
+# flag with a direct UPDATE against sourcebot-db instead. That write is unsupported by
+# upstream and could break on a major version bump; if it does, finish the wizard by hand at
+# https://search.${LAB_DOMAIN}/onboard and everything else still works.
+#
+# Idempotent: a re-run re-POSTs the same credentials (NextAuth signs the existing user in
+# rather than creating a second) and the UPDATE is a no-op once the flag is true. Soft-fails
+# throughout -- a hiccup here never wedges the rest of the bootstrap.
+setup_sourcebot() {
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sourcebot \
+    || { warn "sourcebot container is not running -- skipping"; return 1; }
+  [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping Sourcebot setup"; return 1; }
+
+  local host="search.${LAB_DOMAIN}" jar code csrf i
+  jar="$(mktemp)"; trap 'rm -f "$jar"' RETURN
+  # Same posture as the Nexus block: Sourcebot publishes no host port, so reach it over HTTPS
+  # through Caddy with the name pinned to HOST_IP and verified against the exported lab CA.
+  local -a scurl=(curl -sS --max-time 20 --resolve "${host}:443:${HOST_IP}" --cacert "$CA_OUT" -c "$jar" -b "$jar")
+
+  # Wait for readiness. First boot runs prisma migrations before serving, so Caddy 502s for a
+  # while; any response under 500 means the app is answering.
+  log "waiting for Sourcebot (${host})"
+  code=000
+  for i in $(seq 1 40); do
+    code="$("${scurl[@]}" -o /dev/null -w '%{http_code}' "https://${host}/" 2>/dev/null || echo 000)"
+    [[ "$code" != 000 && "$code" -lt 500 ]] && break
+    sleep 3
+  done
+  [[ "$code" != 000 && "$code" -lt 500 ]] \
+    || { warn "Sourcebot never became ready (last status: $code). Check 'docker compose ps sourcebot', then re-run ./bootstrap.sh (it's idempotent)."; return 1; }
+  ok "Sourcebot is responding"
+
+  # Claim OWNER. NextAuth's credentials authorize() creates the account when the email is
+  # unknown, and Sourcebot's onCreateUser hook makes the first member OWNER.
+  local email="${LAB_USER}@${host}"
+  log "claiming the Sourcebot owner account ($email)"
+  csrf="$("${scurl[@]}" "https://${host}/api/auth/csrf" 2>/dev/null | jq -r '.csrfToken // empty')"
+  if [[ -z "$csrf" ]]; then
+    warn "could not fetch a CSRF token -- register the owner by hand at https://${host}/onboard"
+  else
+    code="$("${scurl[@]}" -o /dev/null -w '%{http_code}' \
+      -X POST "https://${host}/api/auth/callback/credentials" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode "email=${email}" \
+      --data-urlencode "password=${LAB_PASSWORD}" \
+      --data-urlencode "csrfToken=${csrf}" \
+      --data-urlencode "callbackUrl=https://${host}/" 2>/dev/null || echo 000)"
+    # A successful credentials sign-in redirects (302); 200 is also accepted since NextAuth's
+    # response shape varies. Anything else means the account was not claimed.
+    if [[ "$code" == 302 || "$code" == 200 ]]; then
+      ok "owner account claimed ($email / LAB_PASSWORD)"
+    else
+      warn "owner registration returned $code -- register by hand at https://${host}/onboard"
+    fi
+  fi
+
+  # Mark the single-tenant org onboarded (id 1 is seeded by Sourcebot's own migration).
+  log "marking the Sourcebot org onboarded"
+  if docker compose exec -T sourcebot-db \
+       psql -v ON_ERROR_STOP=1 -U sourcebot -d sourcebot \
+       -c 'UPDATE "Org" SET "isOnboarded" = true WHERE id = 1;' >/dev/null 2>&1; then
+    ok "org marked onboarded -- anonymous search is live"
+  else
+    warn "could not set isOnboarded -- finish the wizard at https://${host}/onboard"
+    return 1
+  fi
+}
+log "configuring Sourcebot (always-on)"
+setup_sourcebot \
+  || warn "Sourcebot auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
 # Print the client-side setup instructions.
 cat <<EOF
@@ -351,9 +435,12 @@ Next steps on each client machine
        Windows: net use Z: \\\\files.$LAB_DOMAIN\\lab    (enable insecure guest logons first;
                 Windows blocks guest SMB by default -- see README)
 
-  5. Code search -- OpenGrok at https://search.$LAB_DOMAIN (read-only, no login). Index code by
-     dropping source archives in; it reindexes on a timer (or restart to index now):
-       ./ingest-repos.sh <archive.tar.gz|dir> ...   &&   docker compose restart opengrok
+  5. Code search -- Sourcebot at https://search.$LAB_DOMAIN (anonymous read-only browsing; this
+     script already claimed the owner account as $LAB_USER@search.$LAB_DOMAIN / LAB_PASSWORD for
+     the admin settings). Index code by staging repos, then let it re-index (or restart now):
+       ./ingest-repos.sh <archive.tar.gz|dir|git-clone> ...   &&   docker compose restart sourcebot
+     Note it indexes GIT REPOS only -- ingest-repos.sh converts archives into one-commit repos
+     and preserves real history when you hand it an actual clone.
 
   6. Package registry -- Nexus at https://packages.$LAB_DOMAIN (Docker/OCI on docker.$LAB_DOMAIN).
      This script rotated the admin from the admin123 first-boot default, so log in as

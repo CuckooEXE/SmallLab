@@ -45,6 +45,19 @@ have()    { command -v "$1" >/dev/null 2>&1; }
 # a non-443 port (used for ca.lab:9000).
 labcurl() { local host="$1"; shift; curl -sS --max-time 20 --resolve "${host}:443:${HOST_IP}" --cacert "$CA" "$@"; }
 
+# get_code_any <desc> <host> <path> <code>...  -- GET, assert the status is one of <code>...
+# For apps whose landing page may legitimately 200 or redirect depending on session state.
+get_code_any() {
+  local desc="$1" host="$2" path="$3"; shift 3
+  local code want
+  code="$(labcurl "$host" -o /dev/null -w '%{http_code}' "https://${host}${path}" 2>/dev/null)" \
+    || { fail "$desc" "curl could not connect to ${host}"; return; }
+  for want in "$@"; do
+    [[ "$code" == "$want" ]] && { pass "$desc (HTTP $code)"; return; }
+  done
+  fail "$desc" "expected one of [$*], got $code"
+}
+
 # get_code <desc> <host> <path> [expected]  -- GET, assert HTTP status (default 200).
 get_code() {
   local desc="$1" host="$2" path="$3" want="${4:-200}" code
@@ -125,7 +138,10 @@ get_code "PayloadsAllTheThings payloads.${LAB_DOMAIN}" "payloads.${LAB_DOMAIN}" 
 
 # Interactive programming tools + services. Built images (lab/<name>) come from ./build.sh; the
 # rest are pinned upstream images -- all 200 once present on the host.
-get_code "OpenGrok        grok.${LAB_DOMAIN}"        "grok.${LAB_DOMAIN}"        "/"
+# Sourcebot's landing page serves anonymously once bootstrap.sh has claimed the owner and
+# marked the org onboarded; before that it redirects to /onboard. Accept either -- this line
+# proves the TLS + proxy + app path is healthy, not that onboarding ran (bootstrap reports that).
+get_code_any "Sourcebot       search.${LAB_DOMAIN}"      "search.${LAB_DOMAIN}"      "/"  200 302 307
 # PlantUML's welcome page 302-redirects / to a demo diagram (/uml/<hash>); that redirect is the
 # server's readiness signal, so assert 302 rather than following through to the rendered 200.
 get_code "PlantUML        plantuml.${LAB_DOMAIN}"    "plantuml.${LAB_DOMAIN}"    "/"    302
