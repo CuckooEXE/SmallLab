@@ -15,6 +15,8 @@
 #   9. if the full-lab profile is up: seeds the Mattermost admin (LAB_USER) and a default
 #      team via mmctl. (GitLab needs no bootstrap -- it seeds root's password from .env on
 #      first boot.)
+#  10. rotates Nexus's built-in admin from the well-known first-boot password (admin123) to
+#      LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab
 #
 # Everything is driven by curl against the Technitium API plus a few `docker compose exec`
 # calls. Idempotent: re-running overwrites the A records, no-ops the zone create, and leaves
@@ -264,6 +266,63 @@ log "configuring Mattermost (full-lab profile)"
 setup_mattermost \
   || warn "Mattermost auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
+# rotate_nexus_admin_password -- change Nexus's built-in admin from the well-known first-boot
+# password (admin123, pinned by NEXUS_SECURITY_RANDOMPASSWORD=false in compose/nexus.yaml) to
+# LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab.
+# Nexus publishes no host port, so -- like the clients -- we reach it over HTTPS through Caddy,
+# name pinned to HOST_IP and verified against the exported lab CA. Idempotent: on a re-run
+# admin123 no longer authenticates, so we detect LAB_PASSWORD already working and no-op. Soft-
+# fails: a hiccup here never wedges the rest of the bootstrap.
+rotate_nexus_admin_password() {
+  [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping Nexus admin rotation"; return; }
+
+  local host="packages.${LAB_DOMAIN}" base i code
+  base="https://${host}/service/rest/v1"
+  # ncurl <curl-args...> -- HTTPS to Nexus through Caddy, name pinned + CA-verified.
+  local -a ncurl=(curl -sS --max-time 20 --resolve "${host}:443:${HOST_IP}" --cacert "$CA_OUT")
+  # nauth <user:pass> -- HTTP code from an admin-only endpoint: 200 if the creds authenticate,
+  # 401 if not (anonymous lacks nx-users-read, so a bad password never masquerades as success).
+  nauth() { "${ncurl[@]}" -o /dev/null -w '%{http_code}' -u "$1" "${base}/security/users?userId=admin" 2>/dev/null || echo 000; }
+
+  # Wait for readiness: /status is an unauthenticated probe that only 200s once the DB is up
+  # (first boot ~1-2 min, during which Caddy 502s).
+  log "waiting for Nexus (${host})"
+  code=000
+  for i in $(seq 1 40); do
+    code="$("${ncurl[@]}" -o /dev/null -w '%{http_code}' "${base}/status" 2>/dev/null || echo 000)"
+    [[ "$code" == 200 ]] && break
+    sleep 3
+  done
+  [[ "$code" == 200 ]] || { warn "Nexus never became ready (last status: $code). Check 'docker compose ps nexus', then re-run ./bootstrap.sh (it's idempotent)."; return 1; }
+  ok "Nexus is responding"
+
+  # Already rotated (a re-run)? LAB_PASSWORD authenticates -> nothing to do.
+  if [[ "$(nauth "admin:${LAB_PASSWORD}")" == 200 ]]; then
+    ok "Nexus admin already uses LAB_PASSWORD"
+    return 0
+  fi
+  # First run: must be able to log in with the well-known default before we change it.
+  if [[ "$(nauth "admin:admin123")" != 200 ]]; then
+    warn "Nexus admin authenticates with neither admin123 nor LAB_PASSWORD -- rotate it by hand in the UI (https://${host})"
+    return 1
+  fi
+  # change-password wants the NEW password as a text/plain body; --data-raw sends it verbatim
+  # (no @file / URL-encoding surprises for passwords with reserved chars). 204 == rotated.
+  log "rotating the Nexus admin password to LAB_PASSWORD"
+  code="$("${ncurl[@]}" -o /dev/null -w '%{http_code}' -X PUT \
+    -H 'Content-Type: text/plain' --data-raw "$LAB_PASSWORD" \
+    -u 'admin:admin123' "${base}/security/users/admin/change-password" 2>/dev/null || echo 000)"
+  if [[ "$code" == 204 ]]; then
+    ok "Nexus admin password rotated (admin / LAB_PASSWORD)"
+  else
+    warn "Nexus change-password returned $code -- rotate it by hand in the UI (https://${host})"
+    return 1
+  fi
+}
+log "configuring Nexus (always-on)"
+rotate_nexus_admin_password \
+  || warn "Nexus admin rotation did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
+
 # OpenGrok (grok.lab) needs no bootstrap: it indexes volumes/opengrok/src on startup and
 # every SYNC_PERIOD_MINUTES. Stage code with ./ingest-repos.sh.
 
@@ -295,4 +354,8 @@ Next steps on each client machine
   5. Code search -- OpenGrok at https://search.$LAB_DOMAIN (read-only, no login). Index code by
      dropping source archives in; it reindexes on a timer (or restart to index now):
        ./ingest-repos.sh <archive.tar.gz|dir> ...   &&   docker compose restart opengrok
+
+  6. Package registry -- Nexus at https://packages.$LAB_DOMAIN (Docker/OCI on docker.$LAB_DOMAIN).
+     This script rotated the admin from the admin123 first-boot default, so log in as
+     admin / LAB_PASSWORD. Create hosted/proxy/group repos in the UI -- see Playbook.
 EOF

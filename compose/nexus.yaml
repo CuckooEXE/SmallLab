@@ -1,0 +1,57 @@
+# Sonatype Nexus Repository OSS -- the lab's universal package registry (packages.lab). The
+# Artifactory-style "push anything" store: create hosted, proxy (mirror upstream), and group
+# repos in the UI for npm, PyPI, apt (Debian -- incl. mirroring a real upstream repo), raw
+# (tarballs / any file), Go, Maven, NuGet, RubyGems, and more. All those formats are path-routed
+# on the single packages.lab vhost, so nothing in this file changes when you add a new format --
+# you just create the repo (UI or REST API) and it appears under packages.lab/repository/<name>/.
+#
+# Docker/OCI lives on its OWN vhost (docker.lab) because Docker clients can't share a path-routed
+# host with the other formats -- the registry needs a dedicated connector port. The intended
+# setup (see Playbook) is ONE Docker *group* repo bound to a connector on :8082, combining a
+# hosted member (push your own images) and a docker.io proxy member (pull-through mirror); set the
+# group's "Writable repository" to the hosted member so the single docker.lab endpoint does BOTH
+# push and pull. No push auth is required by the OCI spec -- Nexus gates it by default, but you can
+# grant the anonymous role the push privilege for the same open-registry behaviour as the rest of
+# the lab. Caddy terminates TLS; the connector inside speaks plain HTTP (same posture as GitLab).
+#
+# FIRST-BOOT REQUIREMENTS -- Nexus runs as a FIXED non-root uid 200 (unlike the root-in-container
+# services around it), so its bind-mounted data dir must be owned by 200 or the app won't start:
+#   mkdir -p volumes/nexus && sudo chown -R 200:200 volumes/nexus
+# Admin password: NEXUS_SECURITY_RANDOMPASSWORD=false sets the *initial* admin password to the
+# well-known `admin123` (Nexus won't take an injected secret the way GitLab seeds root). Log in as
+# admin/admin123, change it to LAB_PASSWORD in the UI, and mirror it in .env -- same "change it
+# afterward" posture as GitLab/Mattermost. First boot takes ~1-2 min (DB init); Caddy 502s until.
+#
+# Always-on (no compose profile): it's the artifact backbone, kept up with the core stack. It
+# idles at a JVM baseline of a couple hundred MB heap; bump INSTALL4J_ADD_VM_PARAMS below if you
+# lean on it for heavy proxy caching. packages.lab / docker.lab resolve via the *.lab wildcard.
+services:
+  nexus:
+    image: sonatype/nexus3:3.94.0
+    container_name: nexus
+    restart: unless-stopped
+    environment:
+      # Trim the JVM for a small always-on host: default is -Xms2703m -Xmx2703m + 2703m direct.
+      # Keep (heap + MaxDirectMemorySize) under ~2/3 of host RAM. Raise for busy proxy repos.
+      - INSTALL4J_ADD_VM_PARAMS=-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=2703m -Djava.util.prefs.userRoot=/nexus-data/javaprefs
+      - NEXUS_SECURITY_RANDOMPASSWORD=false
+    volumes:
+      - ../volumes/nexus:/nexus-data   # must be chowned to 200:200 (see header) before first up
+    networks:
+      - caddy
+    labels:
+      # Two vhosts on one container -> caddy_0 / caddy_1 ordinal groups (same trick as MinIO):
+      #   packages.lab -> web UI + every non-Docker format (npm/pip/apt/raw/go/...) on :8081
+      #   docker.lab   -> the Docker group repo's registry connector (create it on :8082 in the UI)
+      caddy_0: packages.${LAB_DOMAIN}
+      caddy_0.reverse_proxy: "{{upstreams 8081}}"
+      caddy_1: docker.${LAB_DOMAIN}
+      caddy_1.reverse_proxy: "{{upstreams 8082}}"
+      # Docker layers are large; don't let the proxy cap request bodies (0 = unlimited).
+      caddy_1.request_body_max_size: "0"
+      homepage.group: Storage & Packages
+      homepage.name: Nexus Repository
+      homepage.icon: /icons/nexus.svg
+      homepage.href: https://packages.${LAB_DOMAIN}
+      homepage.description: Universal package registry -- npm, PyPI, apt, raw, Go, Docker
+      homepage.weight: "55"

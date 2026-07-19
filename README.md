@@ -36,6 +36,7 @@ What it accomplishes:
 | **Ollama** *(opt-in)* | `https://ollama.lab` — `--profile ai-<cpu\|nvidia\|amd\|intel>` | via Caddy      | [Ollama](https://ollama.com) local LLM runtime (HTTP API). Pick one accelerator profile; CPU needs no drivers, GPU needs host setup (`./gpu-setup.sh`). **Off by default** |
 | **Open WebUI** *(opt-in)* | `https://ai.lab` — same `ai-*` profiles       | via Caddy                    | [Open WebUI](https://github.com/open-webui/open-webui) browser chat + model management, talks to Ollama. No login (LAN-trust). **Off by default** |
 | **MinIO**      | `https://s3.lab` (API), `https://s3-console.lab`| via Caddy                    | S3-compatible object storage + console |
+| **Nexus**      | `https://packages.lab`, `https://docker.lab`    | via Caddy                    | [Sonatype Nexus Repository OSS](https://help.sonatype.com/en/sonatype-nexus-repository.html) — universal package registry (Artifactory-style). Hosted + proxy/mirror + group repos for npm, PyPI, apt (Debian), raw (tarballs), Go, Maven, … on `packages.lab`; Docker/OCI on `docker.lab`. Repos created at runtime in the UI |
 | **Samba**      | `\\files.lab\lab`                               | `445/tcp`, `139/tcp`         | SMB share, **passwordless guest access** (no auth) |
 | **Filebrowser**| `https://files.lab`                             | via Caddy                    | web face for the same share, **no login** (noauth) |
 | **WebDAV**     | `https://dav.lab`                               | via Caddy                    | curl `GET`/`PUT`/`DELETE` to the same share (no auth) |
@@ -164,13 +165,14 @@ $EDITOR .env                              # set HOST_IP to THIS box's LAN IP, se
                                           # passwords, keep LAB_DOMAIN=lab
 
 # runtime dirs (bind mounts, git-ignored); a few need specific ownership
-mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,opengrok/src,opengrok/data,opengrok/etc}
+mkdir -p volumes/{caddy/data,caddy/config,stepca,technitium,filebrowser,minio,share,sist2,convertx,privatebin,vaultwarden,code,term,nexus,opengrok/src,opengrok/data,opengrok/etc}
 mkdir -p volumes/gitlab/{config,logs,data} volumes/mattermost/{config,data,logs,plugins,client-plugins,bleve-indexes} volumes/mattermost-db   # full-lab profile (harmless if unused)
 mkdir -p volumes/ollama volumes/open-webui                                     # ai-* profiles (harmless if unused)
 sudo chown 1000:1000  volumes/stepca         # step-ca runs as uid 1000
 sudo chown -R 2000:2000 volumes/mattermost   # mattermost runs as uid 2000
 sudo chown 100:101    volumes/share          # samba/webdav write as uid 100 (smbuser)
 sudo chown 65534:82   volumes/privatebin     # privatebin's php-fpm runs as uid 65534, gid 82
+sudo chown -R 200:200 volumes/nexus          # nexus runs as a fixed uid 200 (else it crash-loops)
 # (OpenGrok chowns volumes/opengrok/src to uid 1111 on boot, so leave that mount writable —
 #  a :ro src makes the container exit.)
 

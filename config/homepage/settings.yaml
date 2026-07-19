@@ -4,32 +4,36 @@ color: slate
 headerStyle: clean
 hideVersion: true
 
-# List form pins the group order; every group renders as rows.
+# Map form (keys = group names, order preserved top-to-bottom). The map form is what actually
+# applies per-group `style`; the list form (- Name:) only pins order and leaves style at the
+# default `columns`, which stacks tiles into vertical columns. `style: row` is what we want:
+# each section is a full-width band stacked on top of the next, tiles flowing left-to-right,
+# `columns` per row. Higher `columns` = shorter sections = more sections visible at once.
 layout:
-  - Links:
-      style: row
-      columns: 4
-  - Infrastructure:
-      style: row
-      columns: 4
-  - Tools:
-      style: row
-      columns: 2
-  - Reference:
-      style: row
-      columns: 4
-  - Storage & Packages:
-      style: row
-      columns: 4
-  - Collaboration:      # GitLab + Mattermost; renders only when --profile full-lab is up
-      style: row
-      columns: 4
-  - AI:                 # Ollama + Open WebUI; renders only under an ai-* profile
-      style: row
-      columns: 4
-  - Workspaces:
-      style: row
-      columns: 4
-  - Terminals:
-      style: row
-      columns: 4
+  Links:
+    style: row
+    columns: 4
+  Infrastructure:
+    style: row
+    columns: 4
+  Tools:
+    style: row
+    columns: 4
+  Reference:
+    style: row
+    columns: 4
+  Storage & Packages:
+    style: row
+    columns: 4
+  Collaboration:        # GitLab + Mattermost; renders only when --profile full-lab is up
+    style: row
+    columns: 4
+  AI:                   # Ollama + Open WebUI; renders only under an ai-* profile
+    style: row
+    columns: 4
+  Workspaces:
+    style: row
+    columns: 4
+  Terminals:
+    style: row
+    columns: 4

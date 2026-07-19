@@ -15,6 +15,7 @@ include:
   - compose/mattermost.yaml
   - compose/ollama.yaml
   - compose/minio.yaml
+  - compose/nexus.yaml
   - compose/samba.yaml
   - compose/filebrowser.yaml
   - compose/webdav.yaml

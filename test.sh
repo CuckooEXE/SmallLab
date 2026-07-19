@@ -86,7 +86,8 @@ else
 fi
 if have openssl; then
   issuer="$(echo | openssl s_client -connect "${HOST_IP}:443" -servername "home.${LAB_DOMAIN}" -CAfile "$CA" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)"
-  if grep -qi 'lab CA' <<<"$issuer"; then
+  # step-ca names its root/intermediate after STEPCA_NAME (.env), e.g. "self CA Intermediate CA".
+  if grep -qiF "${STEPCA_NAME:-lab CA}" <<<"$issuer"; then
     pass "issuer is the lab CA (${issuer#issuer=})"
   else
     fail "cert issuer" "unexpected issuer: ${issuer:-<none>}"
@@ -125,7 +126,9 @@ get_code "PayloadsAllTheThings payloads.${LAB_DOMAIN}" "payloads.${LAB_DOMAIN}" 
 # Interactive programming tools + services. Built images (lab/<name>) come from ./build.sh; the
 # rest are pinned upstream images -- all 200 once present on the host.
 get_code "OpenGrok        grok.${LAB_DOMAIN}"        "grok.${LAB_DOMAIN}"        "/"
-get_code "PlantUML        plantuml.${LAB_DOMAIN}"    "plantuml.${LAB_DOMAIN}"    "/"
+# PlantUML's welcome page 302-redirects / to a demo diagram (/uml/<hash>); that redirect is the
+# server's readiness signal, so assert 302 rather than following through to the rendered 200.
+get_code "PlantUML        plantuml.${LAB_DOMAIN}"    "plantuml.${LAB_DOMAIN}"    "/"    302
 get_code "AST Explorer    ast.${LAB_DOMAIN}"         "ast.${LAB_DOMAIN}"         "/"
 get_code "JSON Crack      jsoncrack.${LAB_DOMAIN}"   "jsoncrack.${LAB_DOMAIN}"   "/"
 get_code "Mermaid Live    mermaid.${LAB_DOMAIN}"     "mermaid.${LAB_DOMAIN}"     "/"
@@ -209,6 +212,24 @@ if have docker && docker image inspect minio/mc:latest >/dev/null 2>&1; then
   fi
 else
   skip "MinIO S3 check" "needs the minio/mc image (docker pull minio/mc)"
+fi
+
+# Nexus is always-on (no compose profile) -- the artifact backbone, same tier as MinIO above.
+# packages.lab serves the web UI and every non-Docker format (npm/pip/apt/raw/go/...) on :8081;
+# /service/rest/v1/status is an unauthenticated readiness probe that only 200s once the DB has
+# finished initialising (first boot takes ~1-2 min, during which Caddy 502s).
+section "Nexus Repository (packages.${LAB_DOMAIN} + docker.${LAB_DOMAIN})"
+get_code "Nexus UI        packages.${LAB_DOMAIN}"     "packages.${LAB_DOMAIN}"    "/"
+get_code "Nexus status    packages.${LAB_DOMAIN}"     "packages.${LAB_DOMAIN}"    "/service/rest/v1/status"
+# docker.lab is the Docker group repo's registry connector on :8082, which only answers once you
+# create that repo + connector in the UI (see Playbook / nexus.yaml header). The OCI /v2/ base
+# returns 200 (anonymous pull granted) or 401 (gated -- still a live registry); anything else means
+# the connector isn't wired up yet, so SKIP (never FAIL) since it needs manual first-time setup.
+dcode="$(labcurl "docker.${LAB_DOMAIN}" -o /dev/null -w '%{http_code}' "https://docker.${LAB_DOMAIN}/v2/" 2>/dev/null || echo 000)"
+if [[ "$dcode" == 200 || "$dcode" == 401 ]]; then
+  pass "Nexus Docker registry docker.${LAB_DOMAIN}/v2/ (HTTP $dcode)"
+else
+  skip "Nexus Docker registry" "docker.${LAB_DOMAIN}/v2/ -> ${dcode} (create the Docker group repo + :8082 connector in the UI)"
 fi
 
 # GitLab and Mattermost are opt-in (--profile full-lab); each check runs only when its

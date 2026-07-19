@@ -16,7 +16,12 @@
 #   docker compose up -d && ./bootstrap.sh
 #
 #   ./build.sh                 # build all, pull prebuilts, write both bundles
+#   ./build.sh --no-save       # build all + pull into the LOCAL daemon, skip the dist/ bundles
 #   ./build.sh sqlime x86      # rebuild only these custom images (skips pull + bundle)
+#
+# Use --no-save when you build ON the machine that will run the stack: the custom images are
+# built and the prebuilts pulled straight into the local docker daemon, ready for
+# `docker compose up -d`, with no dist/ tarballs to carry anywhere.
 #
 # Re-run after editing a Dockerfile, adding an images/<name>/, or to refresh content.
 set -euo pipefail
@@ -34,9 +39,24 @@ die()  { printf '  \033[1;31merror\033[0m %s\n' "$*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || die "docker not found on PATH"
 [[ -d "$IMAGES_DIR" ]] || die "no $IMAGES_DIR/ directory next to this script"
 
-# Targets: explicit args, else every images/<name>.
-targets=("$@")
-if [[ ${#targets[@]} -eq 0 ]]; then
+# Parse flags + targets. --no-save builds/pulls into the local docker daemon but skips the
+# tarball bundling (step 3) -- for building ON the host that runs the stack. Positional args
+# name specific custom images to (re)build.
+no_save=0
+targets=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-save)  no_save=1 ;;
+    -h|--help)  printf 'usage: %s [--no-save] [image ...]\n' "$(basename "$0")"; exit 0 ;;
+    -*)         die "unknown flag: $arg (try --no-save or -h)" ;;
+    *)          targets+=("$arg") ;;
+  esac
+done
+
+# Whether the user named specific images -- captured before we default-fill the full list, and
+# used below to decide the "targeted run" fast path (which never pulls or bundles regardless).
+explicit_targets=${#targets[@]}
+if [[ $explicit_targets -eq 0 ]]; then
   for d in "$IMAGES_DIR"/*/; do targets+=("$(basename "$d")"); done
 fi
 
@@ -55,7 +75,7 @@ done
 [[ ${#failed[@]} -eq 0 ]] || die "${#failed[@]} image(s) failed to build: ${failed[*]}"
 
 # A targeted run just (re)builds those images -- skip the pull + bundle.
-if [[ $# -gt 0 ]]; then
+if [[ $explicit_targets -gt 0 ]]; then
   ok "built ${#built[@]} image(s): ${built[*]}"
   exit 0
 fi
@@ -88,6 +108,17 @@ for img in "${prebuilt[@]}"; do
   log "pulling $img"
   if docker pull -q "$img" >/dev/null; then ok "$img"; else die "failed to pull $img"; fi
 done
+
+# --no-save: the custom images are built and the prebuilts pulled -- everything is already in the
+# local docker daemon, so skip the tarball bundling and leave the machine ready to `compose up`.
+if [[ $no_save -eq 1 ]]; then
+  echo
+  log "summary (--no-save: images are in the local docker daemon; no dist/ bundle written)"
+  ok "custom   : ${#built[@]} images built"
+  ok "prebuilt : ${#prebuilt[@]} images pulled"
+  ok "run it here: docker compose up -d && ./bootstrap.sh"
+  exit 0
+fi
 
 # 3. save both groups as gzipped tarballs for transfer (docker load reads gzip directly).
 mkdir -p "$DIST_DIR"

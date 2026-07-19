@@ -1,10 +1,10 @@
 # Stirling-PDF -- offline PDF toolbox: upload a PDF, OCR it, extract text (pdf.lab). Telemetry and
-# login are disabled; default Tesseract langs (eng/deu/fra/por/chi_sim) ship in the image. Stateless
-# (config is via env), so no volume. To OCR other languages, build a lab/ image FROM this that
-# apt-installs the extra tesseract-ocr-<lang> packages.
+# login are disabled; Stateless (config is via env), so no volume. OCR languages ship in the custom
+# lab/ image built from images/stirling-pdf/ (upstream's eng/deu/fra/por/chi_sim plus the extra
+# tesseract-ocr-<lang> packs listed in that Dockerfile). Add languages by editing that package list.
 services:
   stirling-pdf:
-    image: stirlingtools/stirling-pdf:latest
+    image: lab/stirling-pdf:latest
     container_name: stirling-pdf
     restart: unless-stopped
     environment:

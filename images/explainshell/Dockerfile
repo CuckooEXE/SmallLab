@@ -2,7 +2,9 @@
 # idank/explainshell production image (Python app + a custom-built Caddy + the man-page DB baked
 # in), made self-contained: the source is cloned here and the DB release asset is resolved over
 # GitHub's public API at build time, so no build args or external context are needed. The DB is
-# downloaded during the build and baked in. Self-contained; nothing is fetched at runtime.
+# downloaded during the build and baked in. The web templates are also patched at build time to
+# load all CSS/JS from the baked-in /static tree instead of public CDNs (see localize-assets.sh).
+# Self-contained; nothing is fetched at runtime.
 
 # Clone the upstream source and resolve the latest DB asset name into a file.
 FROM debian:bookworm-slim AS src
@@ -34,6 +36,11 @@ RUN tools/download-latest-db.sh --asset "$(cat /tmp/DB_NAME)" explainshell.db
 COPY --from=src /src/prod/docker/Caddyfile /etc/caddy/Caddyfile
 COPY --from=src /src/prod/docker/start.sh .
 COPY --from=src /src/explainshell/ explainshell/
+# Rewrite the web templates so all CSS/JS loads from the baked-in /static tree
+# instead of public CDNs -- the lab is air-gapped and DEBUG stays false. See
+# localize-assets.sh for the why (config.DEBUG is overloaded and can't be flipped).
+COPY localize-assets.sh /tmp/localize-assets.sh
+RUN sh /tmp/localize-assets.sh && rm /tmp/localize-assets.sh
 ENV DEBUG=false
 ENV DB_PATH=/opt/webapp/explainshell.db
 EXPOSE 8080

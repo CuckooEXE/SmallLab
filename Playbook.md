@@ -17,7 +17,9 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Use a code workspace or terminal](#use-a-code-workspace-or-terminal)
 - [Run the full-lab profile (GitLab & Mattermost)](#run-the-full-lab-profile-gitlab--mattermost)
 - [Run local LLMs (Ollama) with GPU or CPU](#run-local-llms-ollama-with-gpu-or-cpu)
+- [Download and manage Ollama models](#download-and-manage-ollama-models)
 - [Use object storage (MinIO)](#use-object-storage-minio)
+- [Use the package registry (Nexus)](#use-the-package-registry-nexus)
 - [Use the file share](#use-the-file-share)
 - [Issue a cert from the CA](#issue-a-cert-from-the-ca)
 - [Add DNS records](#add-dns-records)
@@ -313,6 +315,61 @@ window (`ollama pull ...` writes to `volumes/ollama`, which then rides along in 
 
 ---
 
+## Download and manage Ollama models
+
+**Description.** Pull models into the shared `volumes/ollama` store, import your own GGUFs, and
+prune what you no longer need.
+**When to use.** After the Ollama profile is up (see [Run local LLMs](#run-local-llms-ollama-with-gpu-or-cpu))
+and you want to add, inspect, or remove models — including sideloading onto an air-gapped host.
+
+**Pick a model that fits.** Browse the catalog at [ollama.com/library](https://ollama.com/library).
+A name is `family:tag`, where the tag encodes size and/or quantization (`llama3.2:3b`,
+`qwen2.5-coder:7b`, `mistral:7b-instruct-q4_K_M`); a bare `llama3.2` resolves to a default
+tag. Rule of thumb: the model has to fit in **VRAM** on a GPU profile (or **RAM** on `ai-cpu`),
+so a 7B at `q4_K_M` needs ~5–6 GB. Overshoot and Ollama spills to CPU or OOMs — check with
+`docker compose logs ollama` after the first run.
+
+Pull, list, inspect, and remove from the CLI (all write to the shared volume):
+
+```bash
+docker compose exec ollama ollama pull llama3.2:3b     # download into volumes/ollama
+docker compose exec ollama ollama list                 # installed models + on-disk sizes
+docker compose exec ollama ollama show llama3.2:3b     # params, context length, quant, license
+docker compose exec ollama ollama run  llama3.2:3b "hi"  # quick smoke test
+docker compose exec ollama ollama rm   llama3.2:3b     # reclaim the disk when done
+```
+
+From the browser: Open WebUI (`ai.lab`) → the model picker's **"Pull a model from Ollama.com"**
+field (or **Admin → Settings → Models**) does the same pull; `WEBUI_AUTH=false` means it's open.
+
+**Import an external GGUF** (e.g. a quant from HuggingFace not in the Ollama library). The host
+dir `volumes/ollama` is mounted at `/root/.ollama` in the container, so drop the file there and
+point a one-line Modelfile at it:
+
+```bash
+cp mymodel.Q4_K_M.gguf volumes/ollama/                                  # -> /root/.ollama/ inside
+printf 'FROM /root/.ollama/mymodel.Q4_K_M.gguf\n' > volumes/ollama/Modelfile
+docker compose exec ollama ollama create mymodel -f /root/.ollama/Modelfile
+docker compose exec ollama ollama run mymodel "hi"
+rm volumes/ollama/mymodel.Q4_K_M.gguf volumes/ollama/Modelfile          # Ollama copied it into its store
+```
+
+**Air-gap: sideload from an online host.** Models aren't bundled by `./build.sh`; pull them where
+there's internet, then ship the shared store. Everything lives under `volumes/ollama/models`
+(`blobs/` + `manifests/`), which merges cleanly:
+
+```bash
+# on an ONLINE host with the profile up:
+docker compose exec ollama ollama pull llama3.2:3b
+tar -C volumes -czf ollama-models.tgz ollama/models      # blobs + manifests only
+
+# copy ollama-models.tgz to the air-gapped host, then there (stack up or down):
+tar -C volumes -xzf ollama-models.tgz                    # merges into the shared store
+docker compose exec ollama ollama list                   # confirm they appear
+```
+
+---
+
 ## Use object storage (MinIO)
 
 **Description.** S3-compatible buckets via the console or any S3 client.
@@ -326,6 +383,67 @@ aws --endpoint-url https://s3.lab s3 cp ./file s3://artifacts/   # any S3 SDK wo
 
 Console: `https://s3-console.lab` (login = `LAB_USER` / `LAB_PASSWORD`). The image is pinned to
 the last release with a full console; swap to `minio/minio` in `compose/minio.yaml` for API-only.
+
+---
+
+## Use the package registry (Nexus)
+
+**Description.** [Sonatype Nexus Repository OSS](https://help.sonatype.com/en/sonatype-nexus-repository.html)
+— the lab's Artifactory-style "push anything" store. Create **hosted** repos (host your own
+packages), **proxy** repos (mirror/cache an upstream), and **group** repos (one URL fronting
+several) for npm, PyPI, apt (Debian), raw (any file/tarball), Go, Maven, and more.
+**When to use.** Publishing internal packages, or mirroring public ones so builds work offline.
+
+**First boot (once).** Nexus runs as a fixed non-root uid `200`, so its data dir must be owned by
+it before the stack comes up, then log in and take over the admin password:
+
+```bash
+mkdir -p volumes/nexus && sudo chown -R 200:200 volumes/nexus
+docker compose up -d nexus            # first start takes ~1-2 min (DB init); packages.lab 502s until ready
+# Log in at https://packages.lab as  admin / admin123  -> change the password to LAB_PASSWORD,
+# mirror it in .env. (NEXUS_SECURITY_RANDOMPASSWORD=false sets that known initial password.)
+```
+
+Create repos under **Server administration → Repositories → Create repository** (or the REST API).
+Each format is path-routed under `packages.lab/repository/<name>/`, so no compose change is ever
+needed to add one. Client setup per format:
+
+```bash
+# --- npm ---  (hosted repo "npm-internal"; or a group fronting hosted + an npmjs.org proxy)
+npm config set registry https://packages.lab/repository/npm-internal/
+npm publish                                              # push
+# auth (Nexus gates publish by default): npm config set //packages.lab/repository/npm-internal/:_auth $(printf '%s' "$LAB_USER:$LAB_PASSWORD" | base64)
+
+# --- pip / PyPI ---  (hosted repo "pypi-internal"; or a proxy of pypi.org to mirror)
+pip install --index-url https://$LAB_USER:$LAB_PASSWORD@packages.lab/repository/pypi-internal/simple/ <pkg>
+twine upload --repository-url https://packages.lab/repository/pypi-internal/ dist/*     # push
+
+# --- raw (tarballs / any file) ---  (hosted "raw-internal")
+curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./artifact.tar.gz https://packages.lab/repository/raw-internal/artifact.tar.gz
+curl -O https://packages.lab/repository/raw-internal/artifact.tar.gz                     # pull
+
+# --- apt / Debian ---  proxy repo "debian" mirrors an upstream (e.g. http://deb.debian.org/debian):
+echo "deb https://packages.lab/repository/debian/ bookworm main" | sudo tee /etc/apt/sources.list.d/lab.list
+sudo apt update                                          # a hosted apt repo needs a GPG signing key pasted into its config
+```
+
+**Docker / OCI (`docker.lab`).** Create a Docker **group** repo with an HTTP connector on **8082**
+(that's the port `compose/nexus.yaml` maps to `docker.lab`), add a **hosted** member (your images)
+and a **docker.io proxy** member (pull-through mirror), and set the group's **Writable repository**
+to the hosted member — one endpoint then does both push and pull:
+
+```bash
+docker login docker.lab                                  # admin / your password (or grant anon the push privilege)
+docker tag myapp:latest docker.lab/myapp:latest
+docker push docker.lab/myapp:latest                      # -> hosted member
+docker pull docker.lab/library/alpine:latest             # -> cached from docker.io via the proxy member
+```
+
+Clients must trust the lab root CA (`lab-root-ca.crt`) already — the Docker daemon uses the system
+store, so no `insecure-registries` entry is needed once the CA is installed (see the setup steps).
+GitLab's built-in registries (`gitlab.lab`, full-lab profile) still cover npm/PyPI/Maven tied to
+projects; Nexus is the always-on, format-agnostic store that also does Debian mirrors, raw files,
+and Docker.
 
 ---
 
