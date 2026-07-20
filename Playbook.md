@@ -18,6 +18,7 @@ says otherwise; the backup plays run on the **backup server**. `192.168.1.171` s
 - [Run the full-lab profile (GitLab & Mattermost)](#run-the-full-lab-profile-gitlab--mattermost)
 - [Run local LLMs (Ollama) with GPU or CPU](#run-local-llms-ollama-with-gpu-or-cpu)
 - [Download and manage Ollama models](#download-and-manage-ollama-models)
+- [Point OpenCode at the lab Ollama](#point-opencode-at-the-lab-ollama)
 - [Use object storage (MinIO)](#use-object-storage-minio)
 - [Use the package registry (Nexus)](#use-the-package-registry-nexus)
 - [Use the file share](#use-the-file-share)
@@ -326,8 +327,10 @@ and you want to add, inspect, or remove models — including sideloading onto an
 A name is `family:tag`, where the tag encodes size and/or quantization (`llama3.2:3b`,
 `qwen2.5-coder:7b`, `mistral:7b-instruct-q4_K_M`); a bare `llama3.2` resolves to a default
 tag. Rule of thumb: the model has to fit in **VRAM** on a GPU profile (or **RAM** on `ai-cpu`),
-so a 7B at `q4_K_M` needs ~5–6 GB. Overshoot and Ollama spills to CPU or OOMs — check with
-`docker compose logs ollama` after the first run.
+so a 7B at `q4_K_M` needs ~5–6 GB. Budget for the **KV cache on top of the weights**: the lab
+runs a 32k context (`OLLAMA_CONTEXT_LENGTH` in `compose/ollama.yaml`), which costs roughly
+another ~2 GB for a 7B and scales about linearly with context length. Overshoot and Ollama
+spills to CPU or OOMs — check with `docker compose logs ollama` after the first run.
 
 Pull, list, inspect, and remove from the CLI (all write to the shared volume):
 
@@ -367,6 +370,84 @@ tar -C volumes -czf ollama-models.tgz ollama/models      # blobs + manifests onl
 tar -C volumes -xzf ollama-models.tgz                    # merges into the shared store
 docker compose exec ollama ollama list                   # confirm they appear
 ```
+
+---
+
+## Point OpenCode at the lab Ollama
+
+**Description.** Configure [OpenCode](https://opencode.ai) (terminal coding agent) on a client
+machine to use `ollama.lab` as its model provider, so no request leaves the lab.
+**When to use.** You want an agentic coding assistant against local models. Requires the Ollama
+profile up (see [Run local LLMs](#run-local-llms-ollama-with-gpu-or-cpu)) with at least one
+tool-capable model pulled, and the client onboarded (see [Onboard a client](#onboard-a-client))
+so it trusts the lab CA and resolves `*.lab`.
+
+**Pull a model that supports tool calling first** — OpenCode drives edits and shell commands
+through tools, so a model without tool support will look broken rather than fail cleanly:
+
+```bash
+docker compose exec ollama ollama pull qwen2.5-coder:7b
+```
+
+OpenCode talks to Ollama's **OpenAI-compatible** endpoint (`/v1`), not the native `/api` one.
+Write the config to `~/.config/opencode/opencode.json` on the **client** (a project-local
+`opencode.json` in a repo root works the same way and wins over the global one):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (lab)",
+      "options": {
+        "baseURL": "https://ollama.lab/v1"
+      },
+      "models": {
+        "qwen2.5-coder:7b": { "name": "Qwen2.5 Coder 7B" }
+      }
+    }
+  },
+  "model": "ollama/qwen2.5-coder:7b",
+  "small_model": "ollama/qwen2.5-coder:7b"
+}
+```
+
+Every model you want to select must be listed under `models` — the key is the exact Ollama tag
+from `ollama list`, and OpenCode addresses it as `ollama/<tag>`. `model` is the default;
+`small_model` is used for cheap side work like naming sessions, so pointing it at a smaller
+model (e.g. `llama3.2:3b`) keeps the big one loaded for real work.
+
+Check it end to end from the client:
+
+```bash
+curl https://ollama.lab/v1/models          # OpenAI-shaped list; should name your pulled models
+opencode                                   # then /models to confirm the Ollama entries appear
+```
+
+**Gotchas.**
+
+- *TLS.* OpenCode is Node-based and uses its own CA store, so importing the root CA into the OS
+  trust store isn't always enough: `export NODE_EXTRA_CA_CERTS=/path/to/lab-root-ca.crt`.
+- *Auth.* The lab runs Ollama unauthenticated; if OpenCode still demands a key, set any
+  non-empty dummy (`"apiKey": "lab"` alongside `baseURL`) — Ollama ignores it.
+- *Truncated or ignored tool calls.* **The lab already handles this** —
+  `compose/ollama.yaml` sets `OLLAMA_CONTEXT_LENGTH=32768` on all four accelerator variants. It
+  has to be set server-side: Ollama's `/v1` endpoint has no way to carry `num_ctx`, so OpenCode
+  cannot ask for a bigger window no matter how it's configured. At the stock 4096 Ollama
+  **silently truncates** — no error, no warning — which eats the system prompt and tool schemas
+  and makes the agent look broken rather than fail cleanly. If you see truncation anyway: the
+  container predates this setting (recreate it), a per-model Modelfile `num_ctx` is overriding
+  the env, or you genuinely need more than 32k — raise it in `compose/ollama.yaml`, minding the
+  VRAM cost in [Download and manage Ollama models](#download-and-manage-ollama-models).
+  `./test.sh` asserts both the env var and the value a resident model is actually serving.
+- *First response is slow.* `OLLAMA_KEEP_ALIVE=5m` unloads an idle model; the next request pays
+  the reload. Raise it in `compose/ollama.yaml` if you bounce in and out of sessions.
+
+**Air-gap:** OpenCode itself is installed on the client from the internet (or an internal Nexus
+npm proxy — see [Use the package registry (Nexus)](#use-the-package-registry-nexus)); the
+`$schema` line is a documentation hint only and is not fetched at runtime. Once installed, the
+config above keeps all inference inside the lab.
 
 ---
 
@@ -720,6 +801,59 @@ mkdir -p volumes/sourcebot/data volumes/sourcebot-db volumes/sourcebot-redis
 sudo chown -R 1500:1500 volumes/sourcebot
 docker compose up -d && ./bootstrap.sh      # re-claims the owner, re-indexes volumes/sourcebot/repos
 ```
+
+### Wire up an LLM (optional)
+
+Sourcebot's *Ask Sourcebot* agentic search needs a language model provider. It has no built-in
+one — you declare providers in a `models` array in `config/sourcebot/config.json`
+([upstream docs](https://docs.sourcebot.dev/docs/configuration/language-model-providers)).
+Alongside the cloud providers it supports an **`openai-compatible`** provider, which is what the
+lab's own Ollama speaks — so this stays fully offline.
+
+Bring Ollama up first ([Run local LLMs](#run-local-llms-ollama-with-gpu-or-cpu)) and pull a model
+that's decent at code and **supports tool calling** (agentic search is a tool loop — a model
+without tool support will just fail to answer):
+
+```bash
+docker compose exec ollama ollama pull qwen2.5-coder:7b
+```
+
+Then add the `models` array next to `connections`:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/sourcebot-dev/sourcebot/main/schemas/v3/index.json",
+  "connections": { "lab": { "type": "git", "url": "file:///repos/*" } },
+  "models": [
+    {
+      "provider": "openai-compatible",
+      "baseUrl": "http://ollama:11434/v1",
+      "model": "qwen2.5-coder:7b",
+      "displayName": "Qwen2.5 Coder 7B (local)"
+    }
+  ]
+}
+```
+
+`model` must match a tag from `ollama list` exactly. (Keep it plain JSON — no comments.)
+
+`docker compose restart sourcebot` to reload; the model then appears in the picker on the Ask tab.
+
+Details that bite:
+
+- **Use the compose alias, not the public hostname.** `http://ollama:11434/v1` — both containers
+  sit on the `caddy` network and `ollama.${LAB_DOMAIN}` would send the call out through Caddy and
+  back, needing the root CA inside the Sourcebot image.
+- **No API key needed.** Ollama ignores auth, so `token` is omitted. Other OpenAI-compatible
+  backends that do want one take `"token": { "env": "SOME_VAR" }` — the var has to be exported
+  into the `sourcebot` service in `compose/sourcebot.yaml`, not just present on the host.
+- **Context length is server-side.** The `/v1` endpoint can't negotiate `num_ctx`, so agentic
+  search inherits `OLLAMA_CONTEXT_LENGTH` from `compose/ollama.yaml` (32768). Code context fills
+  that fast; raise it there if answers look truncated, and expect the VRAM cost.
+- **Reasoning models** emit their scratchpad in an XML tag — set `"reasoningTag": "think"`
+  (the default) so it's stripped from the answer rather than shown as output.
+- This is inference on your own hardware in a loop over search results: a 7B on CPU will answer,
+  slowly. Indexing and plain search are untouched if you never add the `models` array.
 
 ---
 

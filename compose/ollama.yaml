@@ -21,6 +21,13 @@ x-ollama-base: &ollama-base
   environment: &ollama-env
     - OLLAMA_HOST=0.0.0.0:11434    # bind all interfaces (default is loopback -> unreachable from Caddy)
     - OLLAMA_KEEP_ALIVE=5m         # unload an idle model after 5 min to free RAM/VRAM
+    # Context window. Ollama defaults to 4096 and SILENTLY TRUNCATES anything longer -- no error,
+    # no warning. Worse, the OpenAI-compatible endpoint (/v1, used by OpenCode and friends) has no
+    # way to send num_ctx, so the client CANNOT negotiate this; it must be set here, server-side.
+    # At 4096 an agentic client's system prompt + tool schemas get cut and the model just behaves
+    # badly for no visible reason. Costs VRAM/RAM on top of the weights, roughly linear in length
+    # (order ~2 GB for a 7B at 32k) -- lower it if you OOM or spill to CPU on a small card.
+    - OLLAMA_CONTEXT_LENGTH=32768
   volumes:
     - ../volumes/ollama:/root/.ollama
   networks:
@@ -69,9 +76,13 @@ services:
       - video
       - render
     # Consumer cards whose gfx target Ollama doesn't ship may need an override, e.g. a RX 6700 XT
-    # (gfx1031) masquerading as gfx1030. If Ollama falls back to CPU, uncomment and set yours:
+    # (gfx1031) masquerading as gfx1030. If Ollama falls back to CPU, uncomment and set yours.
+    # NOTE: `environment:` REPLACES the shared block above rather than merging, so this list has
+    # to restate every var -- dropping one silently reverts it to the Ollama default.
     # environment:
     #   - OLLAMA_HOST=0.0.0.0:11434
+    #   - OLLAMA_KEEP_ALIVE=5m
+    #   - OLLAMA_CONTEXT_LENGTH=32768
     #   - HSA_OVERRIDE_GFX_VERSION=10.3.0
 
   # --- Intel (EXPERIMENTAL): mainline Ollama has no Intel GPU backend, so this uses Intel's
@@ -89,6 +100,7 @@ services:
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
       - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_CONTEXT_LENGTH=32768  # see the note on the shared env block above
       - no_proxy=localhost,127.0.0.1
       - ZES_ENABLE_SYSMAN=1          # let the runtime read Intel GPU telemetry
       - DEVICE=Arc                   # set iGPU for integrated graphics; Arc for discrete

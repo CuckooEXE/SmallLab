@@ -283,6 +283,29 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ollama; then
   else
     fail "Ollama API" "GET /api/version -> ${body:-<none>} (accelerator backend still loading?)"
   fi
+  # Context length is server-side only: the /v1 endpoint can't carry num_ctx, so if this regresses
+  # to Ollama's 4096 default, clients like OpenCode don't error -- their prompts are silently
+  # truncated and the model just gets quietly worse. Assert the env, then the effective value.
+  want_ctx=32768
+  got_ctx="$(docker compose exec -T ollama sh -c 'printf %s "$OLLAMA_CONTEXT_LENGTH"' 2>/dev/null | tr -d '\r')"
+  if [ "$got_ctx" = "$want_ctx" ]; then
+    pass "Ollama ctx   OLLAMA_CONTEXT_LENGTH=${got_ctx}"
+  else
+    fail "Ollama ctx" "OLLAMA_CONTEXT_LENGTH=${got_ctx:-<unset>}, want ${want_ctx} (compose/ollama.yaml)"
+  fi
+  # /api/ps reports context_length per loaded model -- the value actually in force. Only
+  # meaningful with a model resident, so SKIP rather than fail on an idle runtime.
+  ps_body="$(labcurl "ollama.${LAB_DOMAIN}" "https://ollama.${LAB_DOMAIN}/api/ps" 2>/dev/null)"
+  if grep -q '"context_length"' <<<"$ps_body"; then
+    eff_ctx="$(grep -oE '"context_length" *: *[0-9]+' <<<"$ps_body" | grep -oE '[0-9]+$' | head -1)"
+    if [ "$eff_ctx" = "$want_ctx" ]; then
+      pass "Ollama ctx   loaded model serving ${eff_ctx} tokens"
+    else
+      fail "Ollama ctx" "loaded model serving ${eff_ctx} tokens, want ${want_ctx} (Modelfile num_ctx overriding?)"
+    fi
+  else
+    skip "Ollama ctx (effective)" "no model resident -- load one: docker compose exec ollama ollama run llama3.2:3b hi"
+  fi
 else
   skip "Ollama checks" "not enabled -- start with: docker compose --profile ai-cpu up -d"
 fi
