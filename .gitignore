@@ -1,6 +1,10 @@
 # secrets & generated artifacts
 .env
 lab-root-ca.crt
+# public half of the PGP key bootstrap.sh generates for Nexus's apt-hosted repo. Public key
+# material, but regenerated per install (the private half lives only inside Nexus), so it's
+# host state rather than something to track.
+lab-apt-signing.asc
 
 # Python bytecode cache (session-control's app.py is mounted read-only; the cache is host noise)
 __pycache__/

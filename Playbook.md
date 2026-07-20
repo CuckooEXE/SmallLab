@@ -389,90 +389,104 @@ the last release with a full console; swap to `minio/minio` in `compose/minio.ya
 ## Use the package registry (Nexus)
 
 **Description.** [Sonatype Nexus Repository OSS](https://help.sonatype.com/en/sonatype-nexus-repository.html)
-— the lab's Artifactory-style "push anything" store. Create **hosted** repos (host your own
-packages), **proxy** repos (mirror/cache an upstream), and **group** repos (one URL fronting
-several) for npm, PyPI, apt (Debian), raw (any file/tarball), Go, Maven, and more.
+— the lab's Artifactory-style "push anything" store, for npm, PyPI, apt (Debian), raw (any
+file/tarball), Go, cargo, yum, Docker, Maven, and more.
 **When to use.** Publishing internal packages, or mirroring public ones so builds work offline.
 
 **First boot (once).** Nexus runs as a fixed non-root uid `200`, so its data dir must be owned by
-it before the stack comes up, then log in and take over the admin password:
+it before the stack comes up:
 
 ```bash
 mkdir -p volumes/nexus && sudo chown -R 200:200 volumes/nexus
-docker compose up -d nexus            # first start takes ~1-2 min (DB init); packages.lab 502s until ready
-# Log in at https://packages.lab as  admin / admin123  -> change the password to LAB_PASSWORD,
-# mirror it in .env. (NEXUS_SECURITY_RANDOMPASSWORD=false sets that known initial password.)
+docker compose up -d nexus && ./bootstrap.sh   # first start takes ~1-2 min (DB init); bootstrap waits
 ```
 
-Create repos under **Server administration → Repositories → Create repository** (or the REST API).
-Each format is path-routed under `packages.lab/repository/<name>/`, so no compose change is ever
-needed to add one. The pattern below is the same for every format: one **hosted** repo (you
-publish to it), one **proxy** repo (mirrors/caches an upstream), and one **group** repo fronting
-both (you consume from it — groups are read-only, so pull from the group, push to the hosted).
-Nexus gates publishing by default, so every push authenticates as `LAB_USER` / `LAB_PASSWORD`.
-Client setup per format:
+`bootstrap.sh` does the rest over the REST API: rotates the admin password from the `admin123`
+first-boot default to `LAB_PASSWORD`, then creates one **hosted** repo per format. Log in at
+`https://packages.lab` as **`admin` / `LAB_PASSWORD`** — that's the only account Nexus has
+(plus `anonymous`); `LAB_USER` is not a Nexus user. Re-running bootstrap is safe: it skips repos
+that already exist.
+
+The repos are `npm-hosted`, `pypi-hosted`, `cargo-hosted`, `go-hosted`, `raw-hosted`,
+`yum-hosted` and `apt-hosted` — all served at `https://packages.lab/repository/<name>/`, which is
+both the pull URL and the push target — plus `docker-hosted`, which lives on `docker.lab`
+(anonymous pull, `docker login` to push).
+
+Reads are anonymous; **every push authenticates as `admin` / `LAB_PASSWORD`**. Each format is
+path-routed under `packages.lab/repository/<name>/`, so adding another one later (UI: **Server
+administration → Repositories → Create repository**, or the REST API) never needs a compose change.
+
+**Want to cache upstreams for offline builds?** Bootstrap creates hosted repos only. For
+mirroring, add a **proxy** repo (points at registry.npmjs.org, pypi.org, crates.io, …) and a
+**group** repo listing the hosted + proxy as members, then point clients at the group instead of
+the hosted URL below. Groups are read-only on OSS: pull from the group, push to the hosted repo.
+
+Client setup per format (`admin` / `LAB_PASSWORD` for every push):
 
 ```bash
-# --- npm ---  create: npm-hosted (push), npm-proxy (registry.npmjs.org), npm-group (pull)
-npm config set registry https://packages.lab/repository/npm-group/          # pull (hosted + proxy)
+# --- npm ---
+npm config set registry https://packages.lab/repository/npm-hosted/         # pull
 npm install <pkg>
-npm login   --registry https://packages.lab/repository/npm-hosted/          # LAB_USER / LAB_PASSWORD
+npm login   --registry https://packages.lab/repository/npm-hosted/          # admin / LAB_PASSWORD
 npm publish --registry https://packages.lab/repository/npm-hosted/          # push
 
-# --- pip / PyPI ---  create: pypi-hosted (push), pypi-proxy (pypi.org), pypi-group (pull)
-pip install --index-url https://packages.lab/repository/pypi-group/simple/ <pkg>          # pull
+# --- pip / PyPI ---
+pip install --index-url https://packages.lab/repository/pypi-hosted/simple/ <pkg>         # pull
 twine upload --repository-url https://packages.lab/repository/pypi-hosted/ \
-  -u "$LAB_USER" -p "$LAB_PASSWORD" dist/*                                   # push (or put creds in ~/.pypirc)
+  -u admin -p "$LAB_PASSWORD" dist/*                                         # push (or put creds in ~/.pypirc)
 
-# --- cargo (Rust) ---  create: cargo-hosted (push), cargo-proxy (crates.io), cargo-group (pull)
+# --- cargo (Rust) ---
 # ~/.cargo/config.toml -- the sparse+ prefix is REQUIRED:
-#   [registries.lab]         index = "sparse+https://packages.lab/repository/cargo-group/"
-#   [registries.lab-hosted]  index = "sparse+https://packages.lab/repository/cargo-hosted/"
-#   [source.crates-io]       replace-with = "lab"        # resolve crates.io deps through Nexus
+#   [registries.lab]  index = "sparse+https://packages.lab/repository/cargo-hosted/"
 cargo build                                                                  # pull
-export CARGO_REGISTRIES_LAB_HOSTED_TOKEN="Basic $(printf '%s' "$LAB_USER:$LAB_PASSWORD" | base64)"
-cargo publish --registry lab-hosted                                          # push
+export CARGO_REGISTRIES_LAB_TOKEN="Basic $(printf '%s' "admin:$LAB_PASSWORD" | base64)"
+cargo publish --registry lab                                                 # push
 
-# --- Go modules ---  create: go-hosted (push, needs Nexus >= 3.93), go-proxy (proxy.golang.org), go-group (pull)
-printf 'machine packages.lab\nlogin %s\npassword %s\n' "$LAB_USER" "$LAB_PASSWORD" >> ~/.netrc && chmod 600 ~/.netrc
-go env -w GOAUTH=netrc GOPROXY=https://packages.lab/repository/go-group/ GOSUMDB=off
+# --- Go modules ---
+printf 'machine packages.lab\nlogin admin\npassword %s\n' "$LAB_PASSWORD" >> ~/.netrc && chmod 600 ~/.netrc
+go env -w GOAUTH=netrc GOPROXY=https://packages.lab/repository/go-hosted/ GOSUMDB=off
 go get github.com/you/module@v1.2.3                                          # pull
 # push: PUT the module zip at the Go proxy layout <module>/@v/<version>.zip (Nexus reads go.mod from it):
-curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file module.zip \
+curl -u "admin:$LAB_PASSWORD" --upload-file module.zip \
   https://packages.lab/repository/go-hosted/github.com/you/module/@v/v1.2.3.zip
 
-# --- raw (any file / tarball) ---  create: raw-hosted (push), raw-proxy (mirror an HTTP file tree), raw-group
-curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./artifact.tar.gz \
+# --- raw (any file / tarball) ---
+curl -u "admin:$LAB_PASSWORD" --upload-file ./artifact.tar.gz \
   https://packages.lab/repository/raw-hosted/dist/artifact.tar.gz           # push (path auto-created)
-curl -O https://packages.lab/repository/raw-hosted/dist/artifact.tar.gz     # pull
+curl -O https://packages.lab/repository/raw-hosted/dist/artifact.tar.gz     # pull (anonymous)
 
-# --- apt / Debian ---  create: apt-proxy (deb.debian.org/debian) and/or apt-hosted (needs a PGP signing key)
-echo "deb https://packages.lab/repository/apt-proxy/ bookworm main" | sudo tee /etc/apt/sources.list.d/lab.list
-sudo apt update                                                             # pull (upstream's signature verifies as-is)
-# push a .deb to a hosted repo (create it with a generated GPG key; Nexus signs the METADATA, not the package):
-curl -u "$LAB_USER:$LAB_PASSWORD" -H "Content-Type: multipart/form-data" \
-  --data-binary @./mypkg_1.0_amd64.deb https://packages.lab/repository/apt-hosted/
-# hosted-repo clients import that repo's public key, then add its <distribution>:
-#   echo "deb https://packages.lab/repository/apt-hosted/ <distribution> main" | sudo tee /etc/apt/sources.list.d/lab-hosted.list
+# --- apt / Debian ---  bootstrap generated the signing key; Nexus signs the METADATA, not the .deb
+curl -u "admin:$LAB_PASSWORD" -H "Content-Type: multipart/form-data" \
+  --data-binary @./mypkg_1.0_amd64.deb https://packages.lab/repository/apt-hosted/          # push
+# pull: import the generated public key (./lab-apt-signing.asc from the lab host), then add the repo.
+# "bookworm" is apt-hosted's distribution -- override at create time with NEXUS_APT_DIST=<name>.
+sudo cp lab-apt-signing.asc /etc/apt/trusted.gpg.d/lab-apt.asc
+echo "deb https://packages.lab/repository/apt-hosted/ bookworm main" | sudo tee /etc/apt/sources.list.d/lab.list
+sudo apt update
 
-# --- yum / RPM ---  create: yum-hosted (push; set "Repodata Depth"), yum-proxy (a Rocky/Alma/EPEL mirror), yum-group
-# pull: /etc/yum.repos.d/lab.repo -> [lab] baseurl=https://packages.lab/repository/yum-group/  enabled=1  gpgcheck=0
+# --- yum / RPM ---  created with Repodata Depth 0: upload RPMs at the repo root
+# pull: /etc/yum.repos.d/lab.repo -> [lab] baseurl=https://packages.lab/repository/yum-hosted/  enabled=1  gpgcheck=0
 sudo dnf install <pkg>
-curl -u "$LAB_USER:$LAB_PASSWORD" --upload-file ./mypkg-1.0-1.x86_64.rpm \
+curl -u "admin:$LAB_PASSWORD" --upload-file ./mypkg-1.0-1.x86_64.rpm \
   https://packages.lab/repository/yum-hosted/mypkg-1.0-1.x86_64.rpm         # push (metadata rebuilds ~60s later)
 ```
 
-**Docker / OCI (`docker.lab`).** Create a Docker **group** repo with an HTTP connector on **8082**
-(that's the port `compose/nexus.yaml` maps to `docker.lab`), add a **hosted** member (your images)
-and a **docker.io proxy** member (pull-through mirror), and set the group's **Writable repository**
-to the hosted member — one endpoint then does both push and pull:
+**Docker / OCI (`docker.lab`).** `bootstrap.sh` creates `docker-hosted` with an HTTP connector on
+**8082** — the port `compose/nexus.yaml` maps to `docker.lab` — and activates the Docker Bearer
+Token realm, so pulls are anonymous and pushes need a login:
 
 ```bash
-docker login docker.lab                                  # admin / your password (or grant anon the push privilege)
+docker login docker.lab                                  # admin / LAB_PASSWORD
 docker tag myapp:latest docker.lab/myapp:latest
-docker push docker.lab/myapp:latest                      # -> hosted member
-docker pull docker.lab/library/alpine:latest             # -> cached from docker.io via the proxy member
+docker push docker.lab/myapp:latest
+docker pull docker.lab/myapp:latest                      # anonymous
 ```
+
+> **OSS limitation.** You cannot serve your own images *and* a docker.io pull-through mirror from
+> the single `docker.lab` endpoint. That requires a group repo with a **Writable repository**
+> (group deployment), which is Pro-licensed — the API rejects it with *"Deploying to groups is a
+> PRO-licensed feature."* On OSS a group is pull-only. To add a docker.io mirror, create a docker
+> **proxy** repo with its own connector port and map a second vhost to it in `compose/nexus.yaml`.
 
 Clients must trust the lab root CA (`lab-root-ca.crt`) already — the Docker daemon uses the system
 store, so no `insecure-registries` entry is needed once the CA is installed (see the setup steps).

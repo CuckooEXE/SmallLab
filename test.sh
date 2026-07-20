@@ -237,15 +237,21 @@ fi
 section "Nexus Repository (packages.${LAB_DOMAIN} + docker.${LAB_DOMAIN})"
 get_code "Nexus UI        packages.${LAB_DOMAIN}"     "packages.${LAB_DOMAIN}"    "/"
 get_code "Nexus status    packages.${LAB_DOMAIN}"     "packages.${LAB_DOMAIN}"    "/service/rest/v1/status"
-# docker.lab is the Docker group repo's registry connector on :8082, which only answers once you
-# create that repo + connector in the UI (see Playbook / nexus.yaml header). The OCI /v2/ base
-# returns 200 (anonymous pull granted) or 401 (gated -- still a live registry); anything else means
-# the connector isn't wired up yet, so SKIP (never FAIL) since it needs manual first-time setup.
+# The hosted repos bootstrap.sh creates (one per format). The repo endpoint answers anonymously,
+# so no credentials are needed: 200 = the repo is there, 404 = bootstrap never got to it.
+for nxrepo in npm-hosted pypi-hosted cargo-hosted go-hosted raw-hosted yum-hosted apt-hosted; do
+  get_code "Nexus repo      ${nxrepo}" "packages.${LAB_DOMAIN}" "/service/rest/v1/repositories/${nxrepo}"
+done
+# docker.lab is docker-hosted's registry connector on :8082, created by bootstrap.sh along with
+# the repo. The OCI /v2/ base returns 401 (the Docker Bearer Token challenge -- a live registry;
+# the docker client follows it to /v2/token) or 200. Anything else means the connector isn't
+# listening: either bootstrap hasn't run, or Caddy dropped the docker.lab block (check
+# `docker logs caddy` for "unrecognized directive").
 dcode="$(labcurl "docker.${LAB_DOMAIN}" -o /dev/null -w '%{http_code}' "https://docker.${LAB_DOMAIN}/v2/" 2>/dev/null || echo 000)"
 if [[ "$dcode" == 200 || "$dcode" == 401 ]]; then
   pass "Nexus Docker registry docker.${LAB_DOMAIN}/v2/ (HTTP $dcode)"
 else
-  skip "Nexus Docker registry" "docker.${LAB_DOMAIN}/v2/ -> ${dcode} (create the Docker group repo + :8082 connector in the UI)"
+  fail "Nexus Docker registry" "docker.${LAB_DOMAIN}/v2/ -> ${dcode} (re-run ./bootstrap.sh)"
 fi
 
 # GitLab and Mattermost are opt-in (--profile full-lab); each check runs only when its

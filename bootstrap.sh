@@ -16,7 +16,10 @@
 #      team via mmctl. (GitLab needs no bootstrap -- it seeds root's password from .env on
 #      first boot.)
 #  10. rotates Nexus's built-in admin from the well-known first-boot password (admin123) to
-#      LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab
+#      LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab,
+#      then creates one HOSTED repo per format (npm/pypi/cargo/go/raw/yum/apt/docker) over the
+#      REST API -- including docker-hosted's :8082 registry connector, which is what backs
+#      docker.${LAB_DOMAIN}. apt-hosted gets a generated PGP signing key (lab-apt-signing.asc)
 #  11. claims Sourcebot's OWNER account as LAB_USER and marks its org onboarded, so
 #      search.${LAB_DOMAIN} serves anonymous search instead of a setup wizard
 #
@@ -268,30 +271,38 @@ log "configuring Mattermost (full-lab profile)"
 setup_mattermost \
   || warn "Mattermost auto-setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
 
+# --- Nexus ---------------------------------------------------------------------------------
+# Nexus publishes no host port, so -- like the clients -- we reach it over HTTPS through Caddy,
+# name pinned to HOST_IP and verified against the exported lab CA.
+NEXUS_HOST="packages.${LAB_DOMAIN}"
+NEXUS_API="https://${NEXUS_HOST}/service/rest/v1"
+NEXUS_APT_DIST="${NEXUS_APT_DIST:-bookworm}"            # dists/<name>/ path apt-hosted publishes under
+NEXUS_APT_PUBKEY="$SCRIPT_DIR/lab-apt-signing.asc"      # public half of apt-hosted's signing key
+
+# ncurl <curl-args...>   -- HTTPS to Nexus through Caddy, name pinned + CA-verified.
+# nxadmin <curl-args...> -- the same, authenticated as the Nexus admin.
+ncurl()   { curl -sS --max-time 30 --resolve "${NEXUS_HOST}:443:${HOST_IP}" --cacert "$CA_OUT" "$@"; }
+nxadmin() { ncurl -u "admin:${LAB_PASSWORD}" "$@"; }
+
 # rotate_nexus_admin_password -- change Nexus's built-in admin from the well-known first-boot
 # password (admin123, pinned by NEXUS_SECURITY_RANDOMPASSWORD=false in compose/nexus.yaml) to
 # LAB_PASSWORD, so packages.${LAB_DOMAIN} takes the same admin login as the rest of the lab.
-# Nexus publishes no host port, so -- like the clients -- we reach it over HTTPS through Caddy,
-# name pinned to HOST_IP and verified against the exported lab CA. Idempotent: on a re-run
-# admin123 no longer authenticates, so we detect LAB_PASSWORD already working and no-op. Soft-
-# fails: a hiccup here never wedges the rest of the bootstrap.
+# Idempotent: on a re-run admin123 no longer authenticates, so we detect LAB_PASSWORD already
+# working and no-op. Soft-fails: a hiccup here never wedges the rest of the bootstrap.
 rotate_nexus_admin_password() {
   [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping Nexus admin rotation"; return; }
 
-  local host="packages.${LAB_DOMAIN}" base i code
-  base="https://${host}/service/rest/v1"
-  # ncurl <curl-args...> -- HTTPS to Nexus through Caddy, name pinned + CA-verified.
-  local -a ncurl=(curl -sS --max-time 20 --resolve "${host}:443:${HOST_IP}" --cacert "$CA_OUT")
+  local i code
   # nauth <user:pass> -- HTTP code from an admin-only endpoint: 200 if the creds authenticate,
   # 401 if not (anonymous lacks nx-users-read, so a bad password never masquerades as success).
-  nauth() { "${ncurl[@]}" -o /dev/null -w '%{http_code}' -u "$1" "${base}/security/users?userId=admin" 2>/dev/null || echo 000; }
+  nauth() { ncurl -o /dev/null -w '%{http_code}' -u "$1" "${NEXUS_API}/security/users?userId=admin" 2>/dev/null || echo 000; }
 
   # Wait for readiness: /status is an unauthenticated probe that only 200s once the DB is up
   # (first boot ~1-2 min, during which Caddy 502s).
-  log "waiting for Nexus (${host})"
+  log "waiting for Nexus (${NEXUS_HOST})"
   code=000
   for i in $(seq 1 40); do
-    code="$("${ncurl[@]}" -o /dev/null -w '%{http_code}' "${base}/status" 2>/dev/null || echo 000)"
+    code="$(ncurl -o /dev/null -w '%{http_code}' "${NEXUS_API}/status" 2>/dev/null || echo 000)"
     [[ "$code" == 200 ]] && break
     sleep 3
   done
@@ -305,25 +316,152 @@ rotate_nexus_admin_password() {
   fi
   # First run: must be able to log in with the well-known default before we change it.
   if [[ "$(nauth "admin:admin123")" != 200 ]]; then
-    warn "Nexus admin authenticates with neither admin123 nor LAB_PASSWORD -- rotate it by hand in the UI (https://${host})"
+    warn "Nexus admin authenticates with neither admin123 nor LAB_PASSWORD -- rotate it by hand in the UI (https://${NEXUS_HOST})"
     return 1
   fi
   # change-password wants the NEW password as a text/plain body; --data-raw sends it verbatim
   # (no @file / URL-encoding surprises for passwords with reserved chars). 204 == rotated.
   log "rotating the Nexus admin password to LAB_PASSWORD"
-  code="$("${ncurl[@]}" -o /dev/null -w '%{http_code}' -X PUT \
+  code="$(ncurl -o /dev/null -w '%{http_code}' -X PUT \
     -H 'Content-Type: text/plain' --data-raw "$LAB_PASSWORD" \
-    -u 'admin:admin123' "${base}/security/users/admin/change-password" 2>/dev/null || echo 000)"
+    -u 'admin:admin123' "${NEXUS_API}/security/users/admin/change-password" 2>/dev/null || echo 000)"
   if [[ "$code" == 204 ]]; then
     ok "Nexus admin password rotated (admin / LAB_PASSWORD)"
   else
-    warn "Nexus change-password returned $code -- rotate it by hand in the UI (https://${host})"
+    warn "Nexus change-password returned $code -- rotate it by hand in the UI (https://${NEXUS_HOST})"
     return 1
   fi
 }
+
+# nexus_repo_exists <name> -- 200 from the repo endpoint means it's there, 404 means it isn't.
+# This is the idempotency guard: re-POSTing an existing repo is a 400 ("Name is already used"),
+# not a no-op, so every create checks first.
+nexus_repo_exists() {
+  [[ "$(nxadmin -o /dev/null -w '%{http_code}' "${NEXUS_API}/repositories/$1" 2>/dev/null || echo 000)" == 200 ]]
+}
+
+# nexus_hosted_body <name> [extra-json] -- the request body every hosted format shares, with
+# per-format attributes ({"docker":{...}}, {"yum":{...}}, ...) merged in. writePolicy ALLOW
+# permits redeploying the same version, which is what you want in a lab.
+nexus_hosted_body() {
+  local extra="${2:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg name "$1" --argjson extra "$extra" \
+    '{name: $name, online: true,
+      storage: {blobStoreName: "default", strictContentTypeValidation: true, writePolicy: "ALLOW"}}
+     + $extra'
+}
+
+# nexus_create_hosted <format> <name> [extra-json] -- POST one hosted repo, skipping it if it
+# already exists. Every format is path-routed under packages.${LAB_DOMAIN}/repository/<name>/,
+# so adding one never touches compose.
+nexus_create_hosted() {
+  local format="$1" name="$2" extra="${3:-}" out code
+  if nexus_repo_exists "$name"; then
+    ok "${name} already exists"
+    return 0
+  fi
+  out="$(nxadmin -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+    --data-binary "$(nexus_hosted_body "$name" "$extra")" \
+    "${NEXUS_API}/repositories/${format}/hosted" 2>/dev/null || echo $'\n000')"
+  code="${out##*$'\n'}"
+  if [[ "$code" == 201 ]]; then
+    ok "created ${name} (${format}/hosted)"
+  else
+    warn "could not create ${name} (${format}/hosted): HTTP ${code} ${out%$'\n'*}"
+    return 1
+  fi
+}
+
+# nexus_enable_docker_realm -- docker-hosted below sets forceBasicAuth=false so anonymous
+# `docker pull` works; Nexus requires the Docker Bearer Token realm to be active for that
+# (pushes still authenticate). Idempotent: appends DockerToken only if it's missing.
+nexus_enable_docker_realm() {
+  local active code
+  active="$(nxadmin "${NEXUS_API}/security/realms/active" 2>/dev/null)" || return 1
+  if jq -e 'index("DockerToken")' <<<"$active" >/dev/null 2>&1; then
+    ok "Docker Bearer Token realm already active"
+    return 0
+  fi
+  code="$(nxadmin -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' \
+    --data-binary "$(jq -c '. + ["DockerToken"]' <<<"$active")" \
+    "${NEXUS_API}/security/realms/active" 2>/dev/null || echo 000)"
+  [[ "$code" == 204 ]] && { ok "enabled the Docker Bearer Token realm"; return 0; }
+  warn "could not enable the Docker Bearer Token realm (HTTP ${code}) -- anonymous 'docker pull' will ask for a login"
+  return 1
+}
+
+# nexus_apt_signing_keypair -- apt-hosted is the one format that can't be created from a plain
+# JSON body: Nexus signs the repo METADATA (Release files) itself and demands an armored PGP
+# private key up front. Generate a throwaway passphrase-less signing key in a temp GNUPGHOME,
+# echo the private half for the request body, and leave the public half in lab-apt-signing.asc
+# for clients to import. The private key lives only inside Nexus -- it never touches the repo.
+nexus_apt_signing_keypair() {
+  local home
+  home="$(mktemp -d)" || return 1
+  chmod 700 "$home"
+  # shellcheck disable=SC2064   # expand $home now, not at trap time
+  trap "rm -rf -- '$home'" RETURN
+  gpg --batch --quiet --homedir "$home" --passphrase '' --pinentry-mode loopback \
+    --quick-generate-key "SmallLab APT Signing <apt@${LAB_DOMAIN}>" rsa4096 sign never \
+    >/dev/null 2>&1 || return 1
+  gpg --batch --quiet --homedir "$home" --armor --export > "$NEXUS_APT_PUBKEY" 2>/dev/null || return 1
+  gpg --batch --quiet --homedir "$home" --armor --export-secret-keys 2>/dev/null
+}
+
+# create_nexus_repositories -- HOSTED repos only, one per format: these are the "publish your
+# own packages" endpoints. Proxy and group repos (mirroring npmjs/PyPI/crates.io/... for offline
+# builds) are deliberately NOT created -- add them in the UI if you want caching; see Playbook.
+create_nexus_repositories() {
+  [[ "$exported" == "1" ]] || { warn "lab CA not exported -- skipping Nexus repository setup"; return; }
+  # Nothing below works without a working admin login (a failed/partial rotation).
+  if [[ "$(ncurl -o /dev/null -w '%{http_code}' -u "admin:${LAB_PASSWORD}" \
+        "${NEXUS_API}/security/users?userId=admin" 2>/dev/null || echo 000)" != 200 ]]; then
+    warn "Nexus admin login is not usable -- skipping repository setup"
+    return 1
+  fi
+
+  nexus_create_hosted npm   npm-hosted
+  nexus_create_hosted pypi  pypi-hosted
+  nexus_create_hosted cargo cargo-hosted
+  nexus_create_hosted go    go-hosted
+  nexus_create_hosted raw   raw-hosted
+  # repodataDepth 0 = RPMs uploaded at the repo root; PERMISSIVE skips the is-this-really-an-RPM
+  # path check, so odd filenames don't 400 on upload.
+  nexus_create_hosted yum   yum-hosted '{"yum":{"repodataDepth":0,"deployPolicy":"PERMISSIVE"}}'
+
+  # Docker/OCI: the connector on :8082 is what compose/nexus.yaml maps to docker.${LAB_DOMAIN}.
+  # forceBasicAuth=false + the Docker realm = anonymous pull, `docker login` to push.
+  nexus_enable_docker_realm || true
+  nexus_create_hosted docker docker-hosted \
+    '{"docker":{"v1Enabled":false,"forceBasicAuth":false,"httpPort":8082}}'
+
+  # apt last: it's the only one that generates key material, and the only one we skip silently
+  # when its dependency (gpg) is missing.
+  if nexus_repo_exists apt-hosted; then
+    ok "apt-hosted already exists"
+  elif ! command -v gpg >/dev/null 2>&1; then
+    warn "gpg not installed -- skipping apt-hosted (it needs a PGP signing key; create it in the UI)"
+  else
+    local key
+    log "generating a PGP signing key for apt-hosted"
+    if ! key="$(nexus_apt_signing_keypair)" || [[ -z "$key" ]]; then
+      warn "could not generate the apt signing key -- skipping apt-hosted"
+    else
+      nexus_create_hosted apt apt-hosted \
+        "$(jq -cn --arg dist "$NEXUS_APT_DIST" --arg key "$key" \
+             '{apt: {distribution: $dist}, aptSigning: {keypair: $key, passphrase: ""}}')" \
+        && ok "apt signing public key written to $(basename "$NEXUS_APT_PUBKEY") (clients import it)"
+    fi
+  fi
+}
+
 log "configuring Nexus (always-on)"
-rotate_nexus_admin_password \
-  || warn "Nexus admin rotation did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
+# Repos need a working admin login, so the rotation gates the creation; either one falling over
+# soft-fails the pair (the `!` also keeps set -e from tripping on the non-zero return).
+if ! { rotate_nexus_admin_password && create_nexus_repositories; }; then
+  warn "Nexus setup did not finish -- the rest of the stack is up; re-run ./bootstrap.sh to retry"
+fi
 
 # setup_sourcebot -- claim the Sourcebot OWNER account and mark the org onboarded, so
 # search.${LAB_DOMAIN} lands on a usable search page instead of a setup wizard.
@@ -444,5 +582,11 @@ Next steps on each client machine
 
   6. Package registry -- Nexus at https://packages.$LAB_DOMAIN (Docker/OCI on docker.$LAB_DOMAIN).
      This script rotated the admin from the admin123 first-boot default, so log in as
-     admin / LAB_PASSWORD. Create hosted/proxy/group repos in the UI -- see Playbook.
+     admin / LAB_PASSWORD, and created one HOSTED repo per format -- publish to them now:
+       npm-hosted  pypi-hosted  cargo-hosted  go-hosted  raw-hosted  yum-hosted  apt-hosted
+       docker-hosted  (push/pull at docker.$LAB_DOMAIN; 'docker login' to push, anonymous pull)
+     Pull URLs are https://packages.$LAB_DOMAIN/repository/<name>/ -- see Playbook for the
+     per-format client setup. apt clients import ./lab-apt-signing.asc (Nexus signs the
+     Release metadata with the key this script generated). Want to CACHE npmjs/PyPI/crates.io
+     for offline builds? Add proxy + group repos in the UI -- Playbook has the layout.
 EOF
