@@ -287,7 +287,10 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ollama; then
   # to Ollama's 4096 default, clients like OpenCode don't error -- their prompts are silently
   # truncated and the model just gets quietly worse. Assert the env, then the effective value.
   want_ctx=32768
-  got_ctx="$(docker compose exec -T ollama sh -c 'printf %s "$OLLAMA_CONTEXT_LENGTH"' 2>/dev/null | tr -d '\r')"
+  # `docker exec`, NOT `docker compose exec`: the compose SERVICE is ollama-{cpu,nvidia,amd,intel}
+  # (one per accelerator profile), and only the CONTAINER is named `ollama`. Addressing it by
+  # service name fails with "service ollama is not running" on every profile.
+  got_ctx="$(docker exec ollama sh -c 'printf %s "$OLLAMA_CONTEXT_LENGTH"' 2>/dev/null | tr -d '\r')"
   if [ "$got_ctx" = "$want_ctx" ]; then
     pass "Ollama ctx   OLLAMA_CONTEXT_LENGTH=${got_ctx}"
   else
@@ -304,7 +307,7 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ollama; then
       fail "Ollama ctx" "loaded model serving ${eff_ctx} tokens, want ${want_ctx} (Modelfile num_ctx overriding?)"
     fi
   else
-    skip "Ollama ctx (effective)" "no model resident -- load one: docker compose exec ollama ollama run llama3.2:3b hi"
+    skip "Ollama ctx (effective)" "no model resident -- load one: docker exec -it ollama ollama run llama3.2:3b hi"
   fi
 else
   skip "Ollama checks" "not enabled -- start with: docker compose --profile ai-cpu up -d"
